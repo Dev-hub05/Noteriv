@@ -34,6 +34,24 @@ function getTagColor(tag: string): string {
   return TAG_COLORS[tag.toLowerCase()] || TAG_COLORS.default;
 }
 
+// Movement (px) before a pointer-down becomes a drag. Below this, treat as a click.
+const DRAG_THRESHOLD = 4;
+
+interface DragState {
+  cardId: string;
+  colId: string;
+  startX: number;
+  startY: number;
+  lastX: number;
+  lastY: number;
+  offsetX: number;
+  offsetY: number;
+  width: number;
+  height: number;
+  active: boolean;
+  drop: { colId: string; index: number } | null;
+}
+
 export default function BoardView({ content, onChange }: BoardViewProps) {
   const [board, setBoard] = useState<BoardData>(() => parseBoard(content));
   const [dragCard, setDragCard] = useState<{ cardId: string; colId: string } | null>(null);
@@ -49,6 +67,10 @@ export default function BoardView({ content, onChange }: BoardViewProps) {
   const editInputRef = useRef<HTMLInputElement>(null);
   const newCardInputRef = useRef<HTMLInputElement>(null);
 
+  // Mutable drag state — document-level listeners read this without closure staleness.
+  const dragRef = useRef<DragState | null>(null);
+  const ghostRef = useRef<HTMLDivElement>(null);
+
   // Sync from external content changes
   useEffect(() => {
     setBoard(parseBoard(content));
@@ -59,40 +81,111 @@ export default function BoardView({ content, onChange }: BoardViewProps) {
     onChange(serializeBoard(newBoard));
   }, [onChange]);
 
-  // Drag handlers
-  const handleDragStart = useCallback((cardId: string, colId: string) => {
-    setDragCard({ cardId, colId });
-  }, []);
-
-  const handleDragOver = useCallback((e: React.DragEvent, colId: string, index: number) => {
-    e.preventDefault();
-    setDropTarget({ colId, index });
-  }, []);
-
-  const handleDrop = useCallback(() => {
-    if (!dragCard || !dropTarget) return;
-
+  // Indirection so document listeners always call the latest version.
+  const performDropRef = useRef<(target: { colId: string; index: number }, fromColId: string, cardId: string) => void>(() => {});
+  performDropRef.current = (target, fromColId, cardId) => {
     const newColumns = board.columns.map((col) => ({ ...col, cards: [...col.cards] }));
-    const fromCol = newColumns.find((c) => c.id === dragCard.colId);
-    const toCol = newColumns.find((c) => c.id === dropTarget.colId);
+    const fromCol = newColumns.find((c) => c.id === fromColId);
+    const toCol = newColumns.find((c) => c.id === target.colId);
     if (!fromCol || !toCol) return;
-
-    const cardIdx = fromCol.cards.findIndex((c) => c.id === dragCard.cardId);
+    const cardIdx = fromCol.cards.findIndex((c) => c.id === cardId);
     if (cardIdx === -1) return;
-
     const [card] = fromCol.cards.splice(cardIdx, 1);
-    let insertIdx = dropTarget.index;
+    let insertIdx = target.index;
     if (fromCol.id === toCol.id && cardIdx < insertIdx) insertIdx--;
     toCol.cards.splice(Math.max(0, insertIdx), 0, card);
-
     emitChange({ ...board, columns: newColumns });
-    setDragCard(null);
-    setDropTarget(null);
-  }, [board, dragCard, dropTarget, emitChange]);
+  };
 
-  const handleDragEnd = useCallback(() => {
-    setDragCard(null);
-    setDropTarget(null);
+  // Document-level pointer listeners. HTML5 drag-and-drop is broken in
+  // WebKitGTK (Tauri's Linux webview), so we hand-roll DnD with pointer
+  // events — uniform behavior across macOS, Windows, and Linux.
+  useEffect(() => {
+    function onMove(e: PointerEvent) {
+      const s = dragRef.current;
+      if (!s) return;
+      s.lastX = e.clientX;
+      s.lastY = e.clientY;
+      if (!s.active) {
+        const dx = e.clientX - s.startX;
+        const dy = e.clientY - s.startY;
+        if (dx * dx + dy * dy < DRAG_THRESHOLD * DRAG_THRESHOLD) return;
+        s.active = true;
+        setDragCard({ cardId: s.cardId, colId: s.colId });
+        document.body.style.userSelect = "none";
+        document.body.style.cursor = "grabbing";
+      } else if (ghostRef.current) {
+        const x = e.clientX - s.offsetX;
+        const y = e.clientY - s.offsetY;
+        ghostRef.current.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+      }
+
+      const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+      if (!el) return;
+      const colEl = el.closest<HTMLElement>("[data-col-id]");
+      if (!colEl) return;
+      const colId = colEl.dataset.colId!;
+      const cardEl = el.closest<HTMLElement>("[data-card-id]");
+
+      let drop: { colId: string; index: number };
+      if (cardEl && colEl.contains(cardEl)) {
+        const rect = cardEl.getBoundingClientRect();
+        const before = e.clientY < rect.top + rect.height / 2;
+        const idx = parseInt(cardEl.dataset.cardIndex || "0", 10);
+        drop = { colId, index: before ? idx : idx + 1 };
+      } else {
+        const len = parseInt(colEl.dataset.colLength || "0", 10);
+        drop = { colId, index: len };
+      }
+      s.drop = drop;
+      setDropTarget(drop);
+    }
+
+    function onUp() {
+      const s = dragRef.current;
+      if (!s) {
+        return;
+      }
+      if (s.active && s.drop) {
+        performDropRef.current(s.drop, s.colId, s.cardId);
+      }
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+      dragRef.current = null;
+      setDragCard(null);
+      setDropTarget(null);
+    }
+
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onUp);
+    return () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onUp);
+    };
+  }, []);
+
+  const handleCardPointerDown = useCallback((e: React.PointerEvent, cardId: string, colId: string) => {
+    if (e.button !== 0) return;
+    // Don't start a drag from interactive children (checkbox, close, edit input).
+    const target = e.target as HTMLElement;
+    if (target.closest("button, input")) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    dragRef.current = {
+      cardId,
+      colId,
+      startX: e.clientX,
+      startY: e.clientY,
+      lastX: e.clientX,
+      lastY: e.clientY,
+      offsetX: e.clientX - rect.left,
+      offsetY: e.clientY - rect.top,
+      width: rect.width,
+      height: rect.height,
+      active: false,
+      drop: null,
+    };
   }, []);
 
   // Card operations
@@ -159,6 +252,8 @@ export default function BoardView({ content, onChange }: BoardViewProps) {
       {board.columns.map((col) => (
         <div
           key={col.id}
+          data-col-id={col.id}
+          data-col-length={col.cards.length}
           style={{
             minWidth: 260,
             maxWidth: 300,
@@ -169,11 +264,6 @@ export default function BoardView({ content, onChange }: BoardViewProps) {
             flexDirection: "column",
             maxHeight: "100%",
           }}
-          onDragOver={(e) => {
-            e.preventDefault();
-            handleDragOver(e, col.id, col.cards.length);
-          }}
-          onDrop={handleDrop}
         >
           {/* Column header */}
           <div style={{
@@ -207,33 +297,43 @@ export default function BoardView({ content, onChange }: BoardViewProps) {
               <div key={card.id}>
                 {/* Drop indicator */}
                 {dropTarget?.colId === col.id && dropTarget.index === cardIdx && dragCard && (
-                  <div style={{ height: 2, background: "var(--accent)", borderRadius: 1, margin: "4px 0" }} />
+                  <div style={{
+                    height: 3, background: "var(--accent)", borderRadius: 2,
+                    margin: "4px 0", boxShadow: "0 0 8px var(--accent)",
+                  }} />
                 )}
                 <div
-                  draggable
-                  onDragStart={() => handleDragStart(card.id, col.id)}
-                  onDragOver={(e) => handleDragOver(e, col.id, cardIdx)}
-                  onDragEnd={handleDragEnd}
+                  data-card-id={card.id}
+                  data-card-index={cardIdx}
+                  onPointerDown={(e) => handleCardPointerDown(e, card.id, col.id)}
                   style={{
-                    background: dragCard?.cardId === card.id ? "var(--bg-tertiary)" : "var(--bg-tertiary)",
+                    background: "var(--bg-tertiary)",
                     borderRadius: 6,
                     padding: "8px 10px",
                     marginBottom: 6,
                     cursor: "grab",
-                    opacity: dragCard?.cardId === card.id ? 0.5 : 1,
+                    opacity: dragCard?.cardId === card.id ? 0.25 : 1,
+                    transform: dragCard?.cardId === card.id ? "scale(0.98)" : "scale(1)",
+                    transition: "opacity 0.12s ease-out, transform 0.12s ease-out",
+                    touchAction: "none",
+                    userSelect: "none",
                   }}
                 >
                   <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
                     <button
                       onClick={() => handleToggleCard(col.id, card.id)}
                       style={{
-                        width: 16, height: 16, borderRadius: 3, marginTop: 1,
+                        width: 16, height: 16, borderRadius: 3, marginTop: 1, padding: 0,
                         border: card.completed ? "none" : "1.5px solid var(--text-muted)",
                         background: card.completed ? "var(--green)" : "transparent",
-                        color: "var(--bg-primary)", fontSize: 10, cursor: "pointer",
+                        cursor: "pointer", lineHeight: 0,
                         display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
                       }}
-                    >{card.completed ? "\u2713" : ""}</button>
+                    >{card.completed && (
+                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden>
+                        <path d="M2 5.2 L4.2 7.4 L8 3.4" stroke="var(--bg-primary)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    )}</button>
 
                     <div style={{ flex: 1, minWidth: 0 }}>
                       {editingCard?.cardId === card.id ? (
@@ -294,7 +394,10 @@ export default function BoardView({ content, onChange }: BoardViewProps) {
 
             {/* Trailing drop indicator */}
             {dropTarget?.colId === col.id && dropTarget.index === col.cards.length && dragCard && (
-              <div style={{ height: 2, background: "var(--accent)", borderRadius: 1, margin: "4px 0" }} />
+              <div style={{
+                height: 3, background: "var(--accent)", borderRadius: 2,
+                margin: "4px 0", boxShadow: "0 0 8px var(--accent)",
+              }} />
             )}
 
             {/* Add card input */}
@@ -340,6 +443,82 @@ export default function BoardView({ content, onChange }: BoardViewProps) {
           )}
         </div>
       ))}
+
+      {/* Floating drag ghost */}
+      {dragCard && dragRef.current && (() => {
+        const s = dragRef.current;
+        const draggedCard = board.columns
+          .find((c) => c.id === dragCard.colId)
+          ?.cards.find((c) => c.id === dragCard.cardId);
+        if (!draggedCard) return null;
+        const initialX = s.lastX - s.offsetX;
+        const initialY = s.lastY - s.offsetY;
+        return (
+          <div
+            ref={ghostRef}
+            style={{
+              position: "fixed",
+              top: 0,
+              left: 0,
+              width: s.width,
+              transform: `translate3d(${initialX}px, ${initialY}px, 0)`,
+              pointerEvents: "none",
+              zIndex: 9999,
+              willChange: "transform",
+            }}
+          >
+            <div style={{
+              background: "var(--bg-tertiary)",
+              borderRadius: 6,
+              padding: "8px 10px",
+              transform: "rotate(2deg) scale(1.03)",
+              boxShadow: "0 16px 40px rgba(0,0,0,0.45), 0 4px 10px rgba(0,0,0,0.3)",
+              border: "1px solid var(--accent)",
+            }}>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+                <div style={{
+                  width: 16, height: 16, borderRadius: 3, marginTop: 1, flexShrink: 0,
+                  border: draggedCard.completed ? "none" : "1.5px solid var(--text-muted)",
+                  background: draggedCard.completed ? "var(--green)" : "transparent",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>
+                  {draggedCard.completed && (
+                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden>
+                      <path d="M2 5.2 L4.2 7.4 L8 3.4" stroke="var(--bg-primary)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  )}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{
+                    color: draggedCard.completed ? "var(--text-muted)" : "var(--text-primary)",
+                    fontSize: 12,
+                    textDecoration: draggedCard.completed ? "line-through" : "none",
+                    wordBreak: "break-word",
+                  }}>{draggedCard.text}</span>
+                  {(draggedCard.tags.length > 0 || draggedCard.dueDate) && (
+                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
+                      {draggedCard.tags.map((tag) => (
+                        <span key={tag} style={{
+                          fontSize: 10, padding: "1px 6px", borderRadius: 10,
+                          background: `color-mix(in srgb, ${getTagColor(tag)} 13%, transparent)`,
+                          color: getTagColor(tag),
+                        }}>#{tag}</span>
+                      ))}
+                      {draggedCard.dueDate && (
+                        <span style={{
+                          fontSize: 10, padding: "1px 6px", borderRadius: 10,
+                          background: "color-mix(in srgb, var(--yellow) 13%, transparent)",
+                          color: "var(--yellow)",
+                        }}>{draggedCard.dueDate}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Add column */}
       <div style={{ minWidth: 260 }}>
