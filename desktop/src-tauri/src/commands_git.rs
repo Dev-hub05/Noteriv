@@ -177,6 +177,27 @@ fn ok_or_err(r: GitRunResult) -> Result<String, String> {
     }
 }
 
+/// True if a rebase (interactive or `am`-style) is currently in progress in `dir`.
+/// A half-finished rebase leaves HEAD detached; committing on top of it is how
+/// auto-sync used to silently wedge a repo (local "Sync" commits pile up forever
+/// while every push fails), so sync must detect and recover from it.
+fn rebase_in_progress(dir: &Path) -> bool {
+    let git_dir = {
+        let r = run_git(&["rev-parse", "--git-dir"], dir, None);
+        if r.success && !r.stdout.is_empty() {
+            dir.join(r.stdout)
+        } else {
+            dir.join(".git")
+        }
+    };
+    git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists()
+}
+
+/// True when HEAD is attached to a branch (not detached / mid-rebase).
+fn on_branch(dir: &Path) -> bool {
+    run_git(&["symbolic-ref", "--quiet", "HEAD"], dir, None).success
+}
+
 fn current_branch(dir: &Path) -> String {
     let r = run_git(&["branch", "--show-current"], dir, None);
     if r.success && !r.stdout.is_empty() {
@@ -321,6 +342,13 @@ pub async fn git_sync(args: GitSyncInput) -> Result<bool, String> {
         None
     };
 
+    // Recover from a rebase a previous sync (or a crash) left half-finished.
+    // Without this, the add/commit below would stack commits onto a detached
+    // HEAD and the repo would silently stop syncing. Abort so we resume clean.
+    if rebase_in_progress(p) {
+        let _ = run_git(&["rebase", "--abort"], p, None);
+    }
+
     if let Some(r) = remote.as_deref() {
         let pull_url = match token_ref {
             Some(t) => make_auth_url(r, t),
@@ -332,10 +360,32 @@ pub async fn git_sync(args: GitSyncInput) -> Result<bool, String> {
             let _ = run_git(&["stash", "push", "-m", "noteriv-sync-stash"], p, None);
         }
         let _ = run_git(&["fetch", &pull_url], p, token_ref);
-        let _ = run_git(&["pull", "--rebase", &pull_url, &branch], p, token_ref);
+        let pull = run_git(&["pull", "--rebase", &pull_url, &branch], p, token_ref);
+        // A conflicting rebase stops mid-way and leaves HEAD detached. Don't
+        // commit on top of it: abort, restore the stash, and surface the
+        // conflict so the user knows sync needs manual attention.
+        if !pull.success && rebase_in_progress(p) {
+            let _ = run_git(&["rebase", "--abort"], p, None);
+            if needs_stash {
+                let _ = run_git(&["stash", "pop"], p, None);
+            }
+            return Err(format!(
+                "Sync paused: remote changes conflict with local edits and need manual resolution. {}",
+                pull.stderr
+            ));
+        }
         if needs_stash {
             let _ = run_git(&["stash", "pop"], p, None);
         }
+    }
+
+    // Never commit/push from a detached HEAD: current_branch() guesses a branch
+    // name when detached, so an unguarded push would target the wrong ref and
+    // silently no-op while local commits accumulate. Bail and surface it.
+    if !on_branch(p) {
+        return Err(
+            "Sync paused: repository is in a detached HEAD state and needs manual attention.".into(),
+        );
     }
 
     ok_or_err(run_git(&["add", "-A"], p, None))?;
