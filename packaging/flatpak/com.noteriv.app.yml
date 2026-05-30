@@ -1,0 +1,46 @@
+id: com.noteriv.app
+runtime: org.gnome.Platform
+runtime-version: '47'
+sdk: org.gnome.Sdk
+command: noteriv
+
+finish-args:
+  # Tauri/WebKitGTK rendering
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --device=dri
+  # Network: needed for Git/WebDAV sync. Remove if you ship a build without sync.
+  - --share=network
+  # Vault access. Scope this down (e.g. --filesystem=xdg-documents) once you know
+  # where users keep vaults; Flathub reviewers prefer the narrowest scope possible.
+  - --filesystem=home
+
+modules:
+  - name: noteriv
+    buildsystem: simple
+    build-commands:
+      # Unpack the prebuilt Debian package shipped on the GitHub release.
+      - ar x *.deb
+      - tar -xf data.tar.gz
+      # Binary
+      - install -Dm755 usr/bin/noteriv /app/bin/noteriv
+      # Icons (renamed to the app-id, as Flathub requires)
+      - install -Dm644 usr/share/icons/hicolor/128x128/apps/noteriv.png
+        /app/share/icons/hicolor/128x128/apps/com.noteriv.app.png
+      - install -Dm644 usr/share/icons/hicolor/256x256@2/apps/noteriv.png
+        /app/share/icons/hicolor/256x256/apps/com.noteriv.app.png
+      # Desktop entry + AppStream metadata (both renamed to the app-id)
+      - install -Dm644 com.noteriv.app.desktop /app/share/applications/com.noteriv.app.desktop
+      - install -Dm644 com.noteriv.app.metainfo.xml /app/share/metainfo/com.noteriv.app.metainfo.xml
+    sources:
+      # NOTE: sha256 is a PLACEHOLDER. After the v2.0.3 release is built, run:
+      #   sha256sum Noteriv_2.0.3_amd64.deb
+      # and paste the result below. Flathub's build will fail until this matches.
+      - type: file
+        url: https://github.com/thejacedev/Noteriv/releases/download/v2.0.3/Noteriv_2.0.3_amd64.deb
+        sha256: 0000000000000000000000000000000000000000000000000000000000000000
+      - type: file
+        path: com.noteriv.app.desktop
+      - type: file
+        path: com.noteriv.app.metainfo.xml

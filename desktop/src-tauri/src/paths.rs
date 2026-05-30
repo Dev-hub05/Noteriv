@@ -31,6 +31,14 @@ pub fn is_portable() -> bool {
     portable_root().is_some()
 }
 
+/// Detect whether we're running inside a Flatpak sandbox. The runtime always
+/// sets `FLATPAK_ID`. Flatpak apps are updated by the host (flatpak/Flathub),
+/// never by the app rewriting its own read-only `/app` — so self-update must be
+/// inert here, same as portable mode.
+pub fn is_flatpak() -> bool {
+    std::env::var_os("FLATPAK_ID").is_some()
+}
+
 /// Expand a leading `~` to the user's home directory. Bare paths and
 /// already-absolute paths pass through unchanged.
 pub fn expand_tilde(input: &str) -> PathBuf {

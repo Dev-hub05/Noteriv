@@ -172,7 +172,7 @@ pub fn run() {
             // USB stick or read-only mount, and portable users expect no
             // surprise writes to the executable directory.
             #[cfg(desktop)]
-            if !paths::is_portable() {
+            if !paths::is_portable() && !paths::is_flatpak() {
                 let settings = store::load_settings();
                 let auto = settings
                     .get("autoUpdate")

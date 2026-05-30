@@ -20,6 +20,13 @@ pub struct UpdateInfo {
 
 #[tauri::command]
 pub async fn updater_check(app: AppHandle) -> UpdateInfo {
+    if crate::paths::is_flatpak() {
+        return UpdateInfo {
+            available: false,
+            error: Some("Installed via Flatpak: updates are managed by Flatpak/Flathub.".into()),
+            ..Default::default()
+        };
+    }
     if crate::paths::is_portable() {
         return UpdateInfo {
             available: false,
@@ -64,7 +71,7 @@ pub async fn updater_check(app: AppHandle) -> UpdateInfo {
 
 #[tauri::command]
 pub async fn updater_download(app: AppHandle) -> bool {
-    if crate::paths::is_portable() {
+    if crate::paths::is_flatpak() || crate::paths::is_portable() {
         return false;
     }
     #[cfg(desktop)]
