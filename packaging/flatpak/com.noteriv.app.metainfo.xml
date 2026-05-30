@@ -22,13 +22,10 @@
 
   <launchable type="desktop-id">com.noteriv.app.desktop</launchable>
 
-  <!-- STOPGAP: points at the README banner (exists on main, so the build won't
-       404). Flathub reviewers prefer a real screenshot of the app UI — replace
-       this with a genuine 16:9 PNG before/at submission. -->
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/thejacedev/Noteriv/main/desktop/public/banner.png</image>
-      <caption>Noteriv</caption>
+      <image>https://raw.githubusercontent.com/thejacedev/Noteriv/main/assets/image.png</image>
+      <caption>Editing notes in Noteriv</caption>
     </screenshot>
   </screenshots>
 
