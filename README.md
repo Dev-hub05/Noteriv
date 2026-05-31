@@ -347,7 +347,18 @@ sudo dnf copr enable jacedev/noteriv
 sudo dnf install noteriv
 ```
 
-`dnf upgrade` keeps it current. For other platforms, grab a build from the [latest release](https://github.com/thejacedev/Noteriv/releases/latest):
+`dnf upgrade` keeps it current.
+
+**Flatpak (any Linux distro)**
+
+```bash
+flatpak remote-add --if-not-exists --no-gpg-verify noteriv https://flatpak.thejacedev.xyz/noteriv/repo
+flatpak install noteriv com.noteriv.Noteriv
+```
+
+`flatpak update` keeps it current.
+
+For other platforms, grab a build from the [latest release](https://github.com/thejacedev/Noteriv/releases/latest):
 
 | Platform | Formats |
 |---|---|
