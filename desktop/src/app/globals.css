@@ -1564,8 +1564,8 @@ body {
   max-height: 400px;
   display: flex;
   flex-direction: column;
-  background: #252536;
-  border: 1px solid rgba(205, 214, 244, 0.08);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow:
     0 0 0 1px rgba(0, 0, 0, 0.2),
@@ -1584,7 +1584,7 @@ body {
   align-items: center;
   gap: 8px;
   padding: 10px 14px;
-  border-bottom: 1px solid rgba(205, 214, 244, 0.06);
+  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 
@@ -1649,7 +1649,7 @@ body {
 }
 .palette-item:hover,
 .palette-item-active {
-  background: rgba(205, 214, 244, 0.06);
+  background: var(--bg-hover);
   color: var(--text-primary);
 }
 
@@ -1706,7 +1706,7 @@ body {
 }
 
 .search-highlight {
-  background: rgba(249, 226, 175, 0.25);
+  background: color-mix(in srgb, var(--yellow) 25%, transparent);
   color: var(--yellow);
   padding: 0 1px;
   border-radius: 2px;
@@ -1725,7 +1725,7 @@ body {
   width: 4px;
 }
 .palette-list::-webkit-scrollbar-thumb {
-  background: rgba(205, 214, 244, 0.1);
+  background: var(--scrollbar);
   border-radius: 4px;
 }
 
@@ -5449,8 +5449,8 @@ body {
   max-height: 320px;
   display: flex;
   flex-direction: column;
-  background: #252536;
-  border: 1px solid rgba(205, 214, 244, 0.08);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow:
     0 0 0 1px rgba(0, 0, 0, 0.2),
@@ -6615,8 +6615,8 @@ body {
   max-height: 460px;
   display: flex;
   flex-direction: column;
-  background: #252536;
-  border: 1px solid rgba(205, 214, 244, 0.08);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow:
     0 0 0 1px rgba(0, 0, 0, 0.2),
@@ -6632,7 +6632,7 @@ body {
   align-items: center;
   gap: 8px;
   padding: 10px 14px;
-  border-bottom: 1px solid rgba(205, 214, 244, 0.06);
+  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 

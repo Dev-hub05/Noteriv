@@ -188,3 +188,15 @@ jobs:
             bundles/latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tell the self-hosted Flatpak repo to rebuild for this version.
+      # Requires a PAT secret FLATPAK_DISPATCH_TOKEN (classic, 'repo' scope) and
+      # the flatpak repo at thejacedev/flatpak. Safe no-op until set up.
+      - name: Trigger Flatpak repo rebuild
+        continue-on-error: true
+        run: |
+          curl -fsSL -X POST \
+            -H "Authorization: Bearer ${{ secrets.FLATPAK_DISPATCH_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/thejacedev/flatpak/dispatches" \
+            -d "{\"event_type\":\"noteriv-release\",\"client_payload\":{\"version\":\"${GITHUB_REF_NAME#v}\"}}"

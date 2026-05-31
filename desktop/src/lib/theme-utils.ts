@@ -301,6 +301,24 @@ export const BUILT_IN_THEMES: ThemeDefinition[] = [
   },
 ];
 
+/** Mix two hex colors: t=0 → a, t=1 → b. Returns #rrggbb. Falls back to `a`
+ *  if either input isn't a parseable hex (custom themes using rgb()/names). */
+function mixHex(a: string, b: string, t: number): string {
+  const parse = (h: string): [number, number, number] | null => {
+    let s = h.trim().replace(/^#/, "");
+    if (s.length === 3) s = s.split("").map((c) => c + c).join("");
+    if (!/^[0-9a-fA-F]{6}$/.test(s)) return null;
+    const n = parseInt(s, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  };
+  const ca = parse(a);
+  const cb = parse(b);
+  if (!ca || !cb) return a;
+  const ch = (x: number, y: number) =>
+    Math.round(x + (y - x) * t).toString(16).padStart(2, "0");
+  return `#${ch(ca[0], cb[0])}${ch(ca[1], cb[1])}${ch(ca[2], cb[2])}`;
+}
+
 export function applyTheme(theme: ThemeDefinition): void {
   const root = document.documentElement.style;
   root.setProperty("--bg-primary", theme.colors.bgPrimary);
@@ -321,6 +339,14 @@ export function applyTheme(theme: ThemeDefinition): void {
   root.setProperty("--pink", theme.colors.pink);
   root.setProperty("--scrollbar", theme.colors.scrollbar);
   root.setProperty("--scrollbar-hover", theme.colors.scrollbarHover);
+
+  // Derived vars themes don't define explicitly. Previously these were left at
+  // the Mocha defaults in :root, so the graph canvas (reads --bg-surface) and
+  // hover states (--bg-hover) ignored the selected theme. Concrete hex values
+  // so the canvas fillStyle/strokeStyle can use them directly.
+  root.setProperty("--bg-surface", theme.colors.bgTertiary);
+  root.setProperty("--bg-hover", mixHex(theme.colors.bgTertiary, theme.colors.textPrimary, 0.12));
+  root.setProperty("--accent-hover", mixHex(theme.colors.accent, theme.colors.textPrimary, 0.15));
 }
 
 export async function loadCustomThemes(vaultPath: string): Promise<ThemeDefinition[]> {
