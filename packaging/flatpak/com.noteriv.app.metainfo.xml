@@ -36,6 +36,11 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="2.1.0" date="2026-05-30">
+      <description>
+        <p>Git sync resilience: recovers from rebase conflicts instead of silently wedging, and surfaces conflicts that need attention.</p>
+      </description>
+    </release>
     <release version="2.0.3" date="2026-05-30">
       <description>
         <p>Flatpak support; self-updater disabled inside Flatpak (updates managed by Flathub).</p>

@@ -35,8 +35,8 @@ modules:
       - install -Dm644 com.noteriv.app.metainfo.xml /app/share/metainfo/com.noteriv.app.metainfo.xml
     sources:
       - type: file
-        url: https://github.com/thejacedev/Noteriv/releases/download/v2.0.3/Noteriv_2.0.3_amd64.deb
-        sha256: bc1eb721ef08b7b9a321a9ff52e5aa0846aafceb21484bfaf72627de93fadc79
+        url: https://github.com/thejacedev/Noteriv/releases/download/v2.1.0/Noteriv_2.1.0_amd64.deb
+        sha256: 030b274313f4e33e9caf56b390086151f4c892e14710a7e1607e0d3d3d2624d5
       - type: file
         path: com.noteriv.app.desktop
       - type: file
