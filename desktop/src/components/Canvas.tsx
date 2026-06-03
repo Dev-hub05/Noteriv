@@ -901,10 +901,17 @@ export default function Canvas({ filePath, vaultPath, onSave, onFileSelect, onCl
   const nodeDragRef = useRef<{ nodeId: string; startX: number; startY: number; nodePositions: Map<string, { x: number; y: number }> } | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadedRef = useRef(false);
+  // One-shot guard so we auto "zoom to fit" only on the initial open of a
+  // canvas, not on every edit. Reset when the opened file changes.
+  const didFitRef = useRef(false);
+  // True once the viewport has been measured for real (not the initial
+  // default size) — fitting before this frames for the wrong dimensions.
+  const measuredRef = useRef(false);
 
   // ─── Load canvas data ───
   useEffect(() => {
     loadedRef.current = false;
+    didFitRef.current = false;
     async function load() {
       if (!window.electronAPI) return;
       const content = await window.electronAPI.readFile(filePath);
@@ -948,7 +955,9 @@ export default function Canvas({ filePath, vaultPath, onSave, onFileSelect, onCl
     if (!el) return;
     const ro = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        setViewportSize({ w: entry.contentRect.width, h: entry.contentRect.height });
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) measuredRef.current = true;
+        setViewportSize({ w: width, h: height });
       }
     });
     ro.observe(el);
@@ -1624,6 +1633,18 @@ export default function Canvas({ filePath, vaultPath, onSave, onFileSelect, onCl
     setPanX(fitPanX);
     setPanY(fitPanY);
   }, [canvasData.nodes, viewportSize, resetZoom]);
+
+  // On first open, frame the whole canvas (zoom to fit) once the file has
+  // loaded and the viewport has been measured — instead of the fixed 1:1 / 0,0
+  // default. Runs a single time per opened file (guarded by didFitRef).
+  useEffect(() => {
+    // Wait for both the file to load AND the viewport to be measured for real,
+    // otherwise zoomToFit frames for the default 800x600 and nodes land off-screen.
+    if (didFitRef.current || !loadedRef.current || !measuredRef.current) return;
+    if (viewportSize.w <= 0 || viewportSize.h <= 0) return;
+    didFitRef.current = true;
+    zoomToFit();
+  }, [canvasData, viewportSize, zoomToFit]);
 
   // ─── Drawing edge SVG ───
   const drawingEdgeSvg = useMemo(() => {

@@ -28,7 +28,9 @@ const HIGHLIGHT_COLORS: Record<HighlightColor, string> = {
 };
 
 // Catppuccin Mocha palette
-const C = {
+// Fallback palette (Catppuccin Mocha). At runtime these are overridden by the
+// active theme's CSS variables — see the readColors effect below.
+const DEFAULT_C = {
   base: "#1e1e2e",
   surface0: "#313244",
   surface1: "#45475a",
@@ -44,6 +46,10 @@ const C = {
   mantle: "#181825",
 };
 
+// Pages render at zoom * BASE_SCALE px (1.5x base keeps text crisp); the
+// displayed zoom % is relative to BASE_SCALE.
+const BASE_SCALE = 1.5;
+
 interface PageRenderState {
   canvas: HTMLCanvasElement | null;
   textItems: Array<{ str: string; x: number; y: number; w: number; h: number }>;
@@ -51,12 +57,49 @@ interface PageRenderState {
 }
 
 export default function PDFViewer({ filePath, vaultPath, onExportedNote, onClose }: PDFViewerProps) {
+  // Theme colors, read live from the active theme's CSS variables so the
+  // viewer follows the selected Noteriv theme (concrete hex values so they
+  // work in both inline styles and SVG attributes). Re-read on theme switch.
+  const [C, setC] = useState(DEFAULT_C);
+  useEffect(() => {
+    const readColors = () => {
+      const s = getComputedStyle(document.documentElement);
+      const v = (name: string, fb: string) => s.getPropertyValue(name).trim() || fb;
+      setC({
+        base: v("--bg-primary", DEFAULT_C.base),
+        surface0: v("--bg-surface", DEFAULT_C.surface0),
+        surface1: v("--bg-hover", DEFAULT_C.surface1),
+        surface2: v("--bg-hover", DEFAULT_C.surface2),
+        overlay0: v("--text-muted", DEFAULT_C.overlay0),
+        text: v("--text-primary", DEFAULT_C.text),
+        subtext: v("--text-secondary", DEFAULT_C.subtext),
+        blue: v("--accent", DEFAULT_C.blue),
+        red: v("--red", DEFAULT_C.red),
+        green: v("--green", DEFAULT_C.green),
+        yellow: v("--yellow", DEFAULT_C.yellow),
+        pink: v("--pink", DEFAULT_C.pink),
+        mantle: v("--bg-secondary", DEFAULT_C.mantle),
+      });
+    };
+    readColors();
+    const observer = new MutationObserver(readColors);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class", "style", "data-theme"],
+    });
+    return () => observer.disconnect();
+  }, []);
+
   // PDF state
   const [numPages, setNumPages] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [zoom, setZoom] = useState(1.0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Pages currently within (or near) the viewport — only these get painted to a
+  // canvas. Everything else stays a lightweight placeholder so we never render
+  // the whole document at once. Maintained by the IntersectionObserver below.
+  const [activePages, setActivePages] = useState<Set<number>>(new Set());
 
   // Annotation state
   const [annotations, setAnnotations] = useState<PDFAnnotation[]>([]);
@@ -76,6 +119,15 @@ export default function PDFViewer({ filePath, vaultPath, onExportedNote, onClose
   // Refs
   const pdfDocRef = useRef<any>(null);
   const pageRenderStates = useRef<Map<number, PageRenderState>>(new Map());
+  // In-flight pdf.js render task per page, so we can cancel before re-rendering
+  // (zoom change, StrictMode double-invoke) or when a page scrolls out of view.
+  const renderTasksRef = useRef<Map<number, { cancel: () => void; promise: Promise<void> }>>(new Map());
+  // Intrinsic (scale-1) size of page 1, used for reliable fit math (independent
+  // of the async-rendered canvas DOM size).
+  const firstPageSizeRef = useRef<{ w: number; h: number } | null>(null);
+  // Intrinsic (scale-1) size per page, populated as pages render. Used to size
+  // not-yet-rendered placeholders so total scroll height stays stable.
+  const pageSizesRef = useRef<Map<number, { w: number; h: number }>>(new Map());
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const annotationFileRef = useRef<PDFAnnotationFile>({ pdfPath: filePath, annotations: [] });
@@ -85,42 +137,82 @@ export default function PDFViewer({ filePath, vaultPath, onExportedNote, onClose
   useEffect(() => {
     let cancelled = false;
     async function loadPdf() {
+      const log = (...a: unknown[]) => console.log("[PDFViewer]", ...a);
       try {
         setLoading(true);
         setError(null);
 
-        const pdfjsLib = await import("pdfjs-dist");
-        pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
-
-        // Read PDF file as base64 via Electron
-        if (!window.electronAPI) {
-          setError("Electron API not available");
-          return;
+        // --- Step 1: import pdf.js natively from /public, bypassing webpack ---
+        // webpack's ESM-interop wrapper throws "Properties can only be defined
+        // on Objects" while evaluating pdf.mjs (a known regression, all 5.x).
+        // new Function hides the import from webpack so the browser loads the
+        // module natively and webpack never wraps it.
+        let pdfjsLib: typeof import("pdfjs-dist");
+        try {
+          log("1. importing /pdf.min.mjs (native, webpack-bypassed) …");
+          // eslint-disable-next-line @typescript-eslint/no-implied-eval, no-new-func
+          const nativeImport = new Function("u", "return import(u)") as (u: string) => Promise<unknown>;
+          pdfjsLib = (await nativeImport("/pdf.min.mjs")) as unknown as typeof import("pdfjs-dist");
+          log("1. import OK", {
+            version: (pdfjsLib as { version?: string })?.version,
+            hasGetDocument: typeof pdfjsLib?.getDocument,
+            hasGlobalWorkerOptions: typeof pdfjsLib?.GlobalWorkerOptions,
+            keys: pdfjsLib ? Object.keys(pdfjsLib).slice(0, 12) : null,
+          });
+        } catch (e) {
+          console.error("[PDFViewer] STEP 1 (import) THREW:", e, (e as Error)?.stack);
+          throw e;
         }
 
+        // --- Step 2: worker ---
+        try {
+          log("2. setting workerSrc …");
+          pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+          log("2. workerSrc set to", pdfjsLib.GlobalWorkerOptions.workerSrc);
+        } catch (e) {
+          console.error("[PDFViewer] STEP 2 (workerSrc) THREW:", e, (e as Error)?.stack);
+          throw e;
+        }
+
+        if (!window.electronAPI) { setError("Electron API not available"); return; }
+
+        // --- Step 3: read file bytes ---
+        log("3. reading file …", filePath);
         const raw = await window.electronAPI.readBinaryFile(filePath);
-        if (raw === null) {
-          setError("Could not read PDF file");
-          return;
-        }
-
-        // Convert base64 to Uint8Array
+        if (raw === null) { setError("Could not read PDF file"); return; }
         const binaryStr = atob(raw);
         const bytes = new Uint8Array(binaryStr.length);
-        for (let i = 0; i < binaryStr.length; i++) {
-          bytes[i] = binaryStr.charCodeAt(i);
+        for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+        log("3. read OK, bytes:", bytes.length);
+
+        // --- Step 4: getDocument ---
+        try {
+          log("4. getDocument …");
+          const loadingTask = pdfjsLib.getDocument({ data: bytes });
+          const doc = await loadingTask.promise;
+          log("4. getDocument OK, pages:", doc.numPages);
+          if (cancelled) return;
+          pdfDocRef.current = doc;
+          // Capture page 1's intrinsic size for fit math (independent of the
+          // async-rendered canvas).
+          try {
+            const p1 = await doc.getPage(1);
+            const vp1 = p1.getViewport({ scale: 1 });
+            firstPageSizeRef.current = { w: vp1.width, h: vp1.height };
+            pageSizesRef.current.set(1, { w: vp1.width, h: vp1.height });
+          } catch { /* non-fatal */ }
+          if (cancelled) return;
+          setNumPages(doc.numPages);
+          setLoading(false);
+        } catch (e) {
+          console.error("[PDFViewer] STEP 4 (getDocument) THREW:", e, (e as Error)?.stack);
+          throw e;
         }
-
-        const loadingTask = pdfjsLib.getDocument({ data: bytes });
-        const doc = await loadingTask.promise;
-        if (cancelled) return;
-
-        pdfDocRef.current = doc;
-        setNumPages(doc.numPages);
-        setLoading(false);
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const e = err as Error;
+        console.error("[PDFViewer] load failed:", e?.name, e?.message, "\nstack:\n", e?.stack);
         if (!cancelled) {
-          setError(err?.message || "Failed to load PDF");
+          setError(e?.message || "Failed to load PDF");
           setLoading(false);
         }
       }
@@ -154,10 +246,22 @@ export default function PDFViewer({ filePath, vaultPath, onExportedNote, onClose
   // Render a single PDF page to canvas
   const renderPage = useCallback(async (pageNum: number, canvas: HTMLCanvasElement) => {
     if (!pdfDocRef.current) return;
+
+    // Cancel any in-flight render for this page first — pdf.js throws
+    // "Cannot use the same canvas during multiple render() operations" if a
+    // previous render (zoom change, StrictMode double-invoke, or a fast scroll
+    // back into view) hasn't finished. Wait for the cancellation to settle.
+    const prev = renderTasksRef.current.get(pageNum);
+    if (prev) {
+      prev.cancel();
+      try { await prev.promise; } catch { /* RenderingCancelledException */ }
+      renderTasksRef.current.delete(pageNum);
+    }
+
     const page = await pdfDocRef.current.getPage(pageNum);
-    const baseViewport = page.getViewport({ scale: 1 });
-    const scale = zoom * 1.5; // Higher base scale for clarity
+    const scale = zoom * BASE_SCALE;
     const viewport = page.getViewport({ scale });
+    pageSizesRef.current.set(pageNum, { w: viewport.width / scale, h: viewport.height / scale });
 
     canvas.width = viewport.width;
     canvas.height = viewport.height;
@@ -165,7 +269,16 @@ export default function PDFViewer({ filePath, vaultPath, onExportedNote, onClose
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    await page.render({ canvasContext: ctx, viewport }).promise;
+    const task = page.render({ canvasContext: ctx, viewport });
+    renderTasksRef.current.set(pageNum, task);
+    try {
+      await task.promise;
+    } catch (e) {
+      if ((e as Error)?.name === "RenderingCancelledException") return;
+      throw e;
+    } finally {
+      if (renderTasksRef.current.get(pageNum) === task) renderTasksRef.current.delete(pageNum);
+    }
 
     // Get text content for text selection
     const textContent = await page.getTextContent();
@@ -190,19 +303,59 @@ export default function PDFViewer({ filePath, vaultPath, onExportedNote, onClose
     });
   }, [zoom]);
 
-  // Render all visible pages
+  // Track which pages are near the viewport (windowed rendering). The
+  // rootMargin pre-activates pages roughly one screen above/below so they're
+  // ready by the time they scroll into view.
+  useEffect(() => {
+    if (loading || numPages === 0) return;
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        setActivePages((prev) => {
+          const next = new Set(prev);
+          let changed = false;
+          for (const entry of entries) {
+            const pageNum = parseInt((entry.target as HTMLElement).getAttribute("data-page-container") || "0");
+            if (!pageNum) continue;
+            if (entry.isIntersecting && !next.has(pageNum)) { next.add(pageNum); changed = true; }
+            else if (!entry.isIntersecting && next.has(pageNum)) { next.delete(pageNum); changed = true; }
+          }
+          return changed ? next : prev;
+        });
+      },
+      { root: container, rootMargin: "1000px 0px" }
+    );
+    container.querySelectorAll("[data-page-container]").forEach((el) => io.observe(el));
+    return () => io.disconnect();
+  }, [numPages, loading]);
+
+  // Render only the active (near-viewport) pages, and free pages that scrolled
+  // away so canvas memory stays bounded no matter how long the PDF is.
   useEffect(() => {
     if (!pdfDocRef.current || loading) return;
     const container = scrollContainerRef.current;
     if (!container) return;
+    const targetScale = zoom * BASE_SCALE;
 
-    // Render pages that have canvas refs
-    const canvases = container.querySelectorAll<HTMLCanvasElement>("canvas[data-page]");
-    canvases.forEach((canvas) => {
-      const pageNum = parseInt(canvas.getAttribute("data-page") || "0");
-      if (pageNum > 0) renderPage(pageNum, canvas);
+    activePages.forEach((pageNum) => {
+      const canvas = container.querySelector<HTMLCanvasElement>(`canvas[data-page="${pageNum}"]`);
+      if (!canvas) return;
+      const st = pageRenderStates.current.get(pageNum);
+      // Skip if already painted at the current zoom onto this same canvas.
+      if (st && st.canvas === canvas && Math.abs(st.viewport.scale - targetScale) < 0.001) return;
+      renderPage(pageNum, canvas);
     });
-  }, [numPages, zoom, loading, renderPage]);
+
+    // Drop render state + cancel in-flight work for pages no longer active.
+    for (const pageNum of Array.from(pageRenderStates.current.keys())) {
+      if (!activePages.has(pageNum)) {
+        renderTasksRef.current.get(pageNum)?.cancel();
+        renderTasksRef.current.delete(pageNum);
+        pageRenderStates.current.delete(pageNum);
+      }
+    }
+  }, [activePages, zoom, loading, numPages, renderPage]);
 
   // Track current page from scroll
   useEffect(() => {
@@ -227,7 +380,7 @@ export default function PDFViewer({ filePath, vaultPath, onExportedNote, onClose
     return () => container.removeEventListener("scroll", handleScroll);
   }, [numPages, loading]);
 
-  // Navigate to page
+  // Navigate to page (scroll the page into view in the continuous scroll)
   const goToPage = useCallback((page: number) => {
     const clamped = Math.max(1, Math.min(page, numPages));
     setCurrentPage(clamped);
@@ -240,7 +393,53 @@ export default function PDFViewer({ filePath, vaultPath, onExportedNote, onClose
   // Zoom
   const zoomIn = useCallback(() => setZoom((z) => Math.min(z + 0.25, 4)), []);
   const zoomOut = useCallback(() => setZoom((z) => Math.max(z - 0.25, 0.25)), []);
-  const fitWidth = useCallback(() => setZoom(1.0), []);
+  const clampZoom = (z: number) => Math.max(0.25, Math.min(4, z));
+
+  // Fit the page WIDTH to the viewport. Computed from the page's intrinsic
+  // size + the 1.5x base scale, so it doesn't depend on the async canvas DOM.
+  const fitWidth = useCallback(() => {
+    const scroll = scrollContainerRef.current;
+    const fp = firstPageSizeRef.current;
+    if (!scroll || !fp || fp.w === 0) return;
+    const availW = scroll.clientWidth - 40; // 20px padding each side
+    setZoom(clampZoom(availW / (fp.w * BASE_SCALE)));
+  }, []);
+
+  // Fit a WHOLE page (width AND height) into the viewport — the default on open.
+  const fitPage = useCallback(() => {
+    const scroll = scrollContainerRef.current;
+    const fp = firstPageSizeRef.current;
+    if (!scroll || !fp || fp.w === 0 || fp.h === 0) return;
+    const availW = scroll.clientWidth - 40;
+    const availH = scroll.clientHeight - 40;
+    const z = clampZoom(Math.min(availW / (fp.w * BASE_SCALE), availH / (fp.h * BASE_SCALE)));
+    console.log("[PDFViewer] fitPage", { availW, availH, page: fp, computedZoom: z });
+    setZoom(z);
+  }, []);
+
+  // On first open of each file, frame a full page so the whole page is visible
+  // (default 1.0 = 1.5x base scale, too large to see a full A4 page). Keyed on
+  // filePath + guarded inside the rAF so React StrictMode's mount/cleanup/mount
+  // can't cancel the fit and leave it stuck at the default zoom.
+  const fittedFileRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (loading || numPages === 0 || fittedFileRef.current === filePath) return;
+    requestAnimationFrame(() => {
+      if (fittedFileRef.current === filePath) return;
+      fittedFileRef.current = filePath;
+      fitPage();
+    });
+  }, [filePath, loading, numPages, fitPage]);
+
+  // Expected on-screen size of a page at the current zoom. Uses the page's
+  // known intrinsic size (or page 1's as a fallback) so placeholders reserve
+  // the right amount of scroll height before their canvas renders.
+  const pageDims = useCallback((pageNum: number) => {
+    const scale = zoom * BASE_SCALE;
+    const intrinsic = pageSizesRef.current.get(pageNum) || firstPageSizeRef.current;
+    if (!intrinsic) return { w: 612 * scale, h: 792 * scale }; // US Letter fallback
+    return { w: intrinsic.w * scale, h: intrinsic.h * scale };
+  }, [zoom]);
 
   // Scroll to annotation
   const scrollToAnnotation = useCallback((ann: PDFAnnotation) => {
@@ -457,10 +656,11 @@ export default function PDFViewer({ filePath, vaultPath, onExportedNote, onClose
     );
   }, [isSelecting, selectionStart, selectionEnd, highlightColor]);
 
-  // Render annotation overlay on a page
-  const renderAnnotationOverlay = useCallback((ann: PDFAnnotation, pageNum: number) => {
-    const pageState = pageRenderStates.current.get(pageNum);
-    const scale = pageState?.viewport?.scale || 1;
+  // Render annotation overlay on a page. All pages render at the same scale
+  // (zoom * BASE_SCALE), so derive it directly rather than from per-page render
+  // state — that state is freed for pages outside the active window.
+  const renderAnnotationOverlay = useCallback((ann: PDFAnnotation) => {
+    const scale = zoom * BASE_SCALE;
 
     if (ann.type === "note") {
       return (
@@ -505,7 +705,7 @@ export default function PDFViewer({ filePath, vaultPath, onExportedNote, onClose
         title={ann.comment || ann.text}
       />
     );
-  }, [handleAnnotationClick]);
+  }, [handleAnnotationClick, zoom]);
 
   // Sorted annotations for sidebar
   const sortedAnnotations = [...annotations].sort((a, b) => a.page - b.page || a.created - b.created);
@@ -516,9 +716,11 @@ export default function PDFViewer({ filePath, vaultPath, onExportedNote, onClose
     <div
       ref={containerRef}
       style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 9999,
+        // Fills its tab content area (was a fixed full-window overlay that
+        // drew over the rest of the Noteriv UI).
+        position: "relative",
+        width: "100%",
+        height: "100%",
         display: "flex",
         flexDirection: "column",
         background: C.base,
@@ -573,6 +775,9 @@ export default function PDFViewer({ filePath, vaultPath, onExportedNote, onClose
         </ToolbarButton>
         <ToolbarButton onClick={fitWidth} title="Fit width">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="2" y="3" width="10" height="8" rx="1" stroke="currentColor" strokeWidth="1.3" /><path d="M4 7h6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg>
+        </ToolbarButton>
+        <ToolbarButton onClick={fitPage} title="Fit page">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="3" y="2" width="8" height="10" rx="1" stroke="currentColor" strokeWidth="1.3" /></svg>
         </ToolbarButton>
 
         {/* Divider */}
@@ -652,7 +857,7 @@ export default function PDFViewer({ filePath, vaultPath, onExportedNote, onClose
         >
           {loading && (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 12 }}>
-              <div style={{ width: 32, height: 32, border: `2px solid ${C.blue}`, borderTop: "2px solid transparent", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
+              <div style={{ width: 32, height: 32, borderWidth: 2, borderStyle: "solid", borderColor: `transparent ${C.blue} ${C.blue} ${C.blue}`, borderRadius: "50%", animation: "spin 1s linear infinite" }} />
               <span style={{ fontSize: 13, color: C.subtext }}>Loading PDF...</span>
             </div>
           )}
@@ -664,13 +869,24 @@ export default function PDFViewer({ filePath, vaultPath, onExportedNote, onClose
             </div>
           )}
 
-          {!loading && !error && Array.from({ length: numPages }, (_, i) => i + 1).map((pageNum) => (
+          {!loading && !error && Array.from({ length: numPages }, (_, i) => i + 1).map((pageNum) => {
+            const dims = pageDims(pageNum);
+            const isActive = activePages.has(pageNum);
+            return (
             <div
               key={pageNum}
               data-page-container={pageNum}
-              style={{ position: "relative", boxShadow: "0 2px 12px rgba(0,0,0,0.4)", borderRadius: 4, overflow: "hidden" }}
+              style={{ position: "relative", minHeight: dims.h, boxShadow: "0 2px 12px rgba(0,0,0,0.4)", borderRadius: 4, overflow: "hidden", background: "#fff", flexShrink: 0 }}
             >
-              <canvas data-page={pageNum} style={{ display: "block" }} />
+              {isActive ? (
+                <canvas data-page={pageNum} style={{ display: "block" }} />
+              ) : (
+                // Lightweight placeholder for pages outside the render window —
+                // reserves the right scroll height without painting a canvas.
+                <div style={{ width: dims.w, height: dims.h, display: "flex", alignItems: "center", justifyContent: "center", background: "#fff" }}>
+                  <div style={{ width: 24, height: 24, borderWidth: 2, borderStyle: "solid", borderColor: `transparent ${C.blue} ${C.blue} ${C.blue}`, borderRadius: "50%", animation: "spin 1s linear infinite", opacity: 0.4 }} />
+                </div>
+              )}
               {/* Annotation + interaction overlay */}
               <div
                 style={{
@@ -683,7 +899,7 @@ export default function PDFViewer({ filePath, vaultPath, onExportedNote, onClose
                 onMouseUp={handlePageMouseUp}
               >
                 {/* Render annotations for this page */}
-                {getPageAnnotations(pageNum).map((ann) => renderAnnotationOverlay(ann, pageNum))}
+                {getPageAnnotations(pageNum).map((ann) => renderAnnotationOverlay(ann))}
 
                 {/* Render selection rectangle */}
                 {renderSelection(pageNum)}
@@ -769,7 +985,8 @@ export default function PDFViewer({ filePath, vaultPath, onExportedNote, onClose
                 {pageNum}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
 
         {/* Annotation sidebar */}
@@ -911,15 +1128,15 @@ function ToolbarButton({
         width: 28,
         height: 28,
         borderRadius: 6,
-        background: active ? C.surface1 : "transparent",
-        color: disabled ? C.surface2 : active ? C.blue : C.subtext,
+        background: active ? "var(--bg-hover)" : "transparent",
+        color: disabled ? "var(--text-muted)" : active ? "var(--accent)" : "var(--text-secondary)",
         border: "none",
         cursor: disabled ? "not-allowed" : "pointer",
         flexShrink: 0,
         transition: "background 0.15s, color 0.15s",
       }}
       onMouseEnter={(e) => {
-        if (!disabled) (e.currentTarget as HTMLElement).style.background = C.surface1;
+        if (!disabled) (e.currentTarget as HTMLElement).style.background = "var(--bg-hover)";
       }}
       onMouseLeave={(e) => {
         if (!active) (e.currentTarget as HTMLElement).style.background = "transparent";

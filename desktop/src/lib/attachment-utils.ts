@@ -25,6 +25,12 @@ const VIDEO_EXTS = new Set([
 // Note: .webm can be audio or video. We prioritise audio since the recorder
 // produces webm files. If the file is in video exts too, audio wins.
 
+/** True if the filename has an image extension Noteriv can display. */
+export function isImageFile(filename: string): boolean {
+  const ext = filename.split(".").pop()?.toLowerCase() || "";
+  return IMAGE_EXTS.has(ext);
+}
+
 /**
  * Returns the absolute path to the attachments directory for a vault.
  */

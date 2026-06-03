@@ -29,6 +29,7 @@ import DataviewBlock from "@/components/DataviewBlock";
 import { isBoardContent, isBoardFile, createBoardContent } from "@/lib/board-utils";
 import { isDrawingFile, generateDrawingName, createEmptyDrawing, serializeDrawing } from "@/lib/drawing-utils";
 import { isPdfFile } from "@/lib/pdf-annotation";
+import { isImageFile } from "@/lib/attachment-utils";
 import PublishPreview from "@/components/PublishPreview";
 import FlashcardReview from "@/components/FlashcardReview";
 import CollabPanel from "@/components/CollabPanel";
@@ -78,6 +79,7 @@ const SourceEditor = dynamic(() => import("@/components/SourceEditor"), { ssr: f
 const ReadOnlyView = dynamic(() => import("@/components/ReadOnlyView"), { ssr: false });
 const GraphView = dynamic(() => import("@/components/GraphView"), { ssr: false });
 const Canvas = dynamic(() => import("@/components/Canvas"), { ssr: false });
+const ImageViewer = dynamic(() => import("@/components/ImageViewer"), { ssr: false });
 const SlidePresentation = dynamic(() => import("@/components/SlidePresentation"), { ssr: false });
 const BoardView = dynamic(() => import("@/components/BoardView"), { ssr: false });
 const DrawingEditor = dynamic(() => import("@/components/DrawingEditor"), { ssr: false });
@@ -93,7 +95,7 @@ interface TabState {
   savedContent: string;
   // Non-markdown tabs render a dedicated view instead of the text editor.
   // Absent = a normal markdown note.
-  kind?: "canvas" | "drawing" | "pdf";
+  kind?: "canvas" | "drawing" | "pdf" | "image";
 }
 
 export default function Home() {
@@ -270,6 +272,7 @@ export default function Home() {
       if (isDrawingFile(filePath)) kind = "drawing";
       else if (filePath.endsWith(".canvas")) kind = "canvas";
       else if (isPdfFile(filePath)) kind = "pdf";
+      else if (isImageFile(filePath)) kind = "image";
       if (kind) {
         restoredTabs.push({ filePath, content: "", savedContent: "", kind });
         continue;
@@ -650,6 +653,7 @@ export default function Home() {
     if (isDrawingFile(filePath)) kind = "drawing";
     else if (filePath.endsWith(".canvas")) kind = "canvas";
     else if (isPdfFile(filePath)) kind = "pdf";
+    else if (isImageFile(filePath)) kind = "image";
 
     if (kind) {
       setTabs((prev) =>
@@ -1756,6 +1760,15 @@ export default function Home() {
               onFileSelect={(f) => openFile(f)}
               onClose={() => closeTab(currentTab.filePath)}
             />
+          ) : currentTab.kind === "image" ? (
+            <ImageViewer filePath={currentTab.filePath} />
+          ) : currentTab.kind === "pdf" && activeVault ? (
+            <PDFViewer
+              filePath={currentTab.filePath}
+              vaultPath={activeVault.path}
+              onExportedNote={(mdPath) => { openFile(mdPath); setSidebarRefresh((k) => k + 1); }}
+              onClose={() => closeTab(currentTab.filePath)}
+            />
           ) : null}
         </div>
 
@@ -2066,15 +2079,6 @@ export default function Home() {
         />
       )}
 
-      {/* PDF Viewer */}
-      {pdfFile && activeVault && (
-        <PDFViewer
-          filePath={pdfFile}
-          vaultPath={activeVault.path}
-          onExportedNote={(mdPath) => { openFile(mdPath); setSidebarRefresh((k) => k + 1); }}
-          onClose={() => closeTab(pdfFile)}
-        />
-      )}
 
       {/* Publish Preview */}
       {showPublish && currentTab && activeVault && (
