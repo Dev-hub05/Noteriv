@@ -34,6 +34,43 @@ const SECTIONS: { id: Section; label: string }[] = [
   { id: "ecosystem", label: "Ecosystem" },
 ];
 
+/** Extract the hostname from an https or SSH git remote URL. */
+function gitRemoteHost(url: string): string {
+  const u = (url || "").trim();
+  if (!u) return "";
+  // SSH forms: git@host:path  or  ssh://git@host/path
+  const ssh = u.match(/^(?:ssh:\/\/)?[^@/]+@([^:/]+)/);
+  if (ssh) return ssh[1].toLowerCase();
+  try {
+    return new URL(u).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+interface GitHostInfo {
+  /** github.com — the only host we can validate a token against via its API. */
+  isGitHub: boolean;
+  /** PAT-creation page for known hosts (self-hosted included), else null. */
+  tokenPageUrl: string | null;
+}
+
+function gitHostInfo(url: string): GitHostInfo {
+  const host = gitRemoteHost(url);
+  const isGitHub = host === "github.com" || host.endsWith(".github.com");
+  let tokenPageUrl: string | null = null;
+  if (isGitHub) {
+    tokenPageUrl = "https://github.com/settings/tokens/new?scopes=repo&description=Noteriv";
+  } else if (host.includes("gitlab")) {
+    tokenPageUrl = `https://${host}/-/user_settings/personal_access_tokens`;
+  } else if (host.includes("gitea") || host.includes("forgejo") || host === "codeberg.org") {
+    tokenPageUrl = `https://${host}/user/settings/applications`;
+  } else if (host.includes("bitbucket")) {
+    tokenPageUrl = "https://bitbucket.org/account/settings/app-passwords/";
+  }
+  return { isGitHub, tokenPageUrl };
+}
+
 interface SettingsModalProps {
   settings: AppSettings;
   hotkeys: HotkeyBinding[];
@@ -406,7 +443,9 @@ export default function SettingsModal({
 
   // ── Git remote + GitHub auth (per-vault) ──
   const [ghUser, setGhUser] = useState<GitHubUser | null>(null);
+  const [hasToken, setHasToken] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
+  const [usernameInput, setUsernameInput] = useState("");
   const [tokenError, setTokenError] = useState("");
   const [savingToken, setSavingToken] = useState(false);
   const [editingToken, setEditingToken] = useState(false);
@@ -421,6 +460,7 @@ export default function SettingsModal({
     setRemoteError("");
     setRemoteSaved(false);
     setTokenInput("");
+    setUsernameInput("");
     setTokenError("");
     setEditingToken(false);
   }, [vault?.id, vault?.gitRemote]);
@@ -431,10 +471,13 @@ export default function SettingsModal({
     let cancelled = false;
     (async () => {
       try {
-        const u = await window.electronAPI!.authGetUser(vault.id);
-        if (!cancelled) setGhUser(u);
+        const [u, has] = await Promise.all([
+          window.electronAPI!.authGetUser(vault.id),
+          window.electronAPI!.authHasToken(vault.id),
+        ]);
+        if (!cancelled) { setGhUser(u); setHasToken(has); }
       } catch {
-        if (!cancelled) setGhUser(null);
+        if (!cancelled) { setGhUser(null); setHasToken(false); }
       }
     })();
     return () => { cancelled = true; };
@@ -470,17 +513,29 @@ export default function SettingsModal({
     if (!window.electronAPI || !vault) return;
     const trimmed = tokenInput.trim();
     if (!trimmed) { setTokenError("Token is required"); return; }
+    const username = usernameInput.trim();
+    const { isGitHub } = gitHostInfo(vault.gitRemote || remoteUrl);
     setSavingToken(true);
     setTokenError("");
     try {
-      const result = await window.electronAPI.authValidateToken(trimmed);
-      if (!result.valid) {
-        setTokenError(result.error || "Invalid token");
-        return;
+      // Only GitHub exposes an API we can validate the token against (and fetch
+      // the user's avatar/name). For any other host — GitLab, Gitea/Forgejo,
+      // Bitbucket, self-hosted — save the credentials as entered.
+      if (isGitHub) {
+        const result = await window.electronAPI.authValidateToken(trimmed);
+        if (!result.valid) {
+          setTokenError(result.error || "Invalid token");
+          return;
+        }
+        await window.electronAPI.authSaveToken(vault.id, trimmed, username || undefined);
+        setGhUser(result);
+      } else {
+        await window.electronAPI.authSaveToken(vault.id, trimmed, username || undefined);
+        setGhUser(null);
       }
-      await window.electronAPI.authSaveToken(vault.id, trimmed);
-      setGhUser(result);
+      setHasToken(true);
       setTokenInput("");
+      setUsernameInput("");
       setEditingToken(false);
     } catch (err: unknown) {
       setTokenError(err instanceof Error ? err.message : "Failed to save token");
@@ -493,6 +548,7 @@ export default function SettingsModal({
     if (!window.electronAPI || !vault) return;
     await window.electronAPI.authRemoveToken(vault.id);
     setGhUser(null);
+    setHasToken(false);
   };
 
   const handleTestConnection = async () => {
@@ -515,9 +571,10 @@ export default function SettingsModal({
   };
 
   const renderSync = () => {
-    const isConnected = !!ghUser?.valid;
+    const isConnected = hasToken || !!ghUser?.valid;
     const showTokenInput = !isConnected || editingToken;
     const remoteDirty = (vault?.gitRemote || "") !== remoteUrl.trim();
+    const hostInfo = gitHostInfo(vault?.gitRemote || remoteUrl);
 
     return (
     <div className="st-section">
@@ -528,14 +585,14 @@ export default function SettingsModal({
         </div>
       ) : (
         <>
-          <Row label="Remote URL" desc="GitHub repository URL for syncing this vault.">
+          <Row label="Remote URL" desc="Git remote for this vault — GitHub, GitLab, Gitea/Forgejo, Bitbucket, or self-hosted. HTTPS or SSH.">
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <input
                 type="text"
                 className="st-text-input"
                 value={remoteUrl}
                 onChange={(e) => { setRemoteUrl(e.target.value); setRemoteSaved(false); }}
-                placeholder="https://github.com/user/repo.git"
+                placeholder="https://gitlab.com/user/repo.git"
                 style={{ minWidth: 240 }}
               />
               <button
@@ -559,14 +616,16 @@ export default function SettingsModal({
             </div>
           )}
 
-          <Row label="GitHub Account" desc="Personal access token with repo scope. Stored encrypted locally.">
-            <button
-              type="button"
-              className="st-test-btn"
-              onClick={() => window.electronAPI?.authOpenTokenPage()}
-            >
-              Generate token →
-            </button>
+          <Row label="Git credentials" desc="Access token for HTTPS sync, stored encrypted locally. Not needed for SSH remotes.">
+            {hostInfo.tokenPageUrl && (
+              <button
+                type="button"
+                className="st-test-btn"
+                onClick={() => window.electronAPI?.openExternal(hostInfo.tokenPageUrl!)}
+              >
+                Generate token →
+              </button>
+            )}
           </Row>
 
           {isConnected && !editingToken && (
@@ -576,16 +635,16 @@ export default function SettingsModal({
               )}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div className="st-row-label" style={{ fontSize: 12 }}>
-                  {ghUser?.name || ghUser?.username}
+                  {ghUser?.valid ? (ghUser.name || ghUser.username) : "Access token saved"}
                 </div>
                 <div className="st-row-desc" style={{ color: "var(--green)" }}>
-                  @{ghUser?.username}
+                  {ghUser?.valid ? `@${ghUser.username}` : "Encrypted on this device"}
                 </div>
               </div>
               <button
                 type="button"
                 className="st-test-btn"
-                onClick={() => { setEditingToken(true); setTokenInput(""); setTokenError(""); }}
+                onClick={() => { setEditingToken(true); setTokenInput(""); setUsernameInput(""); setTokenError(""); }}
               >
                 Change
               </button>
@@ -601,13 +660,24 @@ export default function SettingsModal({
 
           {showTokenInput && (
             <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "8px 0" }}>
+              {!hostInfo.isGitHub && (
+                <input
+                  type="text"
+                  className="st-text-input"
+                  value={usernameInput}
+                  onChange={(e) => setUsernameInput(e.target.value)}
+                  placeholder="Username (optional — blank works for GitLab; use your login for Gitea/Forgejo)"
+                  onKeyDown={(e) => { if (e.key === "Enter" && tokenInput.trim() && !savingToken) submitToken(); }}
+                  style={{ width: "100%" }}
+                />
+              )}
               <div style={{ display: "flex", gap: 6 }}>
                 <input
                   type="password"
                   className="st-text-input"
                   value={tokenInput}
                   onChange={(e) => setTokenInput(e.target.value)}
-                  placeholder="ghp_xxxx..."
+                  placeholder={hostInfo.isGitHub ? "ghp_xxxx..." : "Access token / app password"}
                   onKeyDown={(e) => { if (e.key === "Enter" && tokenInput.trim() && !savingToken) submitToken(); }}
                   style={{ flex: 1, fontFamily: "var(--font-mono, monospace)" }}
                 />
@@ -623,12 +693,17 @@ export default function SettingsModal({
                   <button
                     type="button"
                     className="st-test-btn"
-                    onClick={() => { setEditingToken(false); setTokenError(""); setTokenInput(""); }}
+                    onClick={() => { setEditingToken(false); setTokenError(""); setTokenInput(""); setUsernameInput(""); }}
                   >
                     Cancel
                   </button>
                 )}
               </div>
+              {!hostInfo.isGitHub && (
+                <div className="st-row-desc">
+                  Token is stored encrypted and used as the HTTPS password. For Bitbucket, set username to <code>x-token-auth</code>.
+                </div>
+              )}
               {tokenError && (
                 <div className="st-test-result st-test-fail">{tokenError}</div>
               )}

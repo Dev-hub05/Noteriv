@@ -118,7 +118,7 @@ interface ElectronAPI {
   setActiveVault: (id: string) => Promise<Vault | null>;
 
   // GitHub auth
-  authSaveToken: (vaultId: string, token: string) => Promise<boolean>;
+  authSaveToken: (vaultId: string, token: string, username?: string) => Promise<boolean>;
   authHasToken: (vaultId: string) => Promise<boolean>;
   authRemoveToken: (vaultId: string) => Promise<boolean>;
   authValidateToken: (token: string) => Promise<GitHubUser>;

@@ -5,7 +5,9 @@ order: 2
 
 # Git Sync
 
-Git sync is Noteriv's primary synchronization method on the desktop app. It uses the system-installed `git` binary to commit your vault changes and push them to a remote GitHub repository. Every edit is version-controlled, giving you a complete history of your notes that you can browse, diff, and restore at any time.
+Git sync is Noteriv's primary synchronization method on the desktop app. It uses the system-installed `git` binary to commit your vault changes and push them to a remote git repository — GitHub, GitLab, Gitea/Forgejo, Bitbucket, or a self-hosted server. Every edit is version-controlled, giving you a complete history of your notes that you can browse, diff, and restore at any time.
+
+> **Non-GitHub remotes are newly supported and not yet thoroughly tested.** See [Other Git Remotes](#other-git-remotes) below. GitHub remains the most-tested path; if you sync to another host and hit a problem, please [open an issue](https://github.com/thejacedev/Noteriv/issues) with the host type and the exact error.
 
 ## Prerequisites
 
@@ -13,9 +15,9 @@ Git sync requires:
 
 1. **Git installed**: The `git` command must be available on your system PATH. Noteriv calls `git --version` at startup to verify this. On macOS, git ships with Xcode command-line tools. On Linux, install it via your package manager (`apt install git`, `dnf install git`). On Windows, install [Git for Windows](https://git-scm.com/download/win).
 
-2. **A GitHub repository**: Create a repository on GitHub (public or private) to hold your vault. Note the HTTPS URL (e.g., `https://github.com/yourname/notes.git`).
+2. **A git repository**: Create a repository (public or private) on any git host to hold your vault. Note its HTTPS or SSH URL (e.g., `https://github.com/yourname/notes.git` or `git@gitlab.com:yourname/notes.git`).
 
-3. **A personal access token**: Generate a token at [github.com/settings/tokens](https://github.com/settings/tokens) with the `repo` scope. This token authenticates push and pull operations without requiring SSH keys.
+3. **Credentials**: For HTTPS, a personal access token with repo read/write scope (on GitHub, generate one at [github.com/settings/tokens](https://github.com/settings/tokens) with the `repo` scope). For SSH remotes, your existing SSH keys are used and no token is needed. See [Other Git Remotes](#other-git-remotes) for per-host details.
 
 ## Setup
 
@@ -112,6 +114,39 @@ Git operations that contact the remote (fetch, pull, push) require authenticatio
 This approach avoids storing the token in git's credential manager, in the git config, or in any file that persists after the operation. The token exists on disk only for the duration of the git command.
 
 On Windows, a `.bat` file is used instead of a shell script, with the same create-use-delete lifecycle.
+
+## Other Git Remotes
+
+> **Status: shipped, but not yet thoroughly tested.** Git sync is no longer GitHub-only — the engine runs the system `git` binary against whatever remote you configure, so any git host should work. This path has had only limited testing. If you hit a problem with a non-GitHub host, please [open an issue](https://github.com/thejacedev/Noteriv/issues) noting the host (GitLab, Gitea/Forgejo, Bitbucket, self-hosted) and the exact error.
+
+Point a vault at any remote in **Settings → Sync → Remote URL** (HTTPS or SSH).
+
+### SSH (no token needed)
+
+If your host already has your SSH keys, use the SSH remote URL and leave the credentials/token field empty:
+
+```
+git@gitlab.com:you/notes.git
+git@forgejo.example.com:you/notes.git
+```
+
+Sync runs non-interactively using your existing SSH agent/keys. Unknown host keys are accepted on first connect, so the first sync to a self-hosted server won't hang. Paired with a self-hosted or LAN remote, this keeps work notes entirely off third-party services.
+
+### HTTPS with an access token
+
+Use the HTTPS remote URL and provide an access token in **Settings → Sync → Git credentials**. The token is combined with a username to authenticate; most hosts expect a specific username:
+
+| Host | Username | Token |
+|---|---|---|
+| GitHub | *(leave blank — defaults to `oauth2`)* | Personal access token, `repo` scope |
+| GitLab | *(leave blank — `oauth2`)* | Personal access token, `read_repository` + `write_repository` |
+| Gitea / Forgejo / Codeberg | your login username | Access token |
+| Bitbucket | `x-token-auth` | Repository or workspace access token |
+| Other / self-hosted | usually your login username | Access / app token |
+
+Noteriv builds the authenticated URL as `https://<username>:<token>@host/...`. A blank username defaults to `oauth2` (works for GitHub and GitLab). The token is stored encrypted on your device and used only as the HTTPS password.
+
+> Token validation (the account avatar) and the repository picker work for GitHub only, since they use the GitHub API. For other hosts, paste the remote URL and credentials manually — they are saved without an online check.
 
 ## Auto-Sync
 

@@ -1,6 +1,6 @@
 // Shells out to the `git` binary. Mirrors desktop/main/sync/git.js exactly.
 
-use crate::auth::{make_auth_url, token_for_vault};
+use crate::auth::credentials_for_vault;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -327,8 +327,8 @@ pub struct GitSyncInput {
 #[tauri::command]
 pub async fn git_sync(args: GitSyncInput) -> Result<bool, String> {
     let p = Path::new(&args.dir);
-    let token = token_for_vault(args.vault_id.as_deref());
-    let token_ref = token.as_deref();
+    let creds = credentials_for_vault(args.vault_id.as_deref());
+    let token_ref = creds.as_ref().map(|c| c.token.as_str());
 
     let msg = args.message.unwrap_or_else(|| {
         format!("Sync notes {}", Utc::now().format("%Y-%m-%d"))
@@ -350,8 +350,8 @@ pub async fn git_sync(args: GitSyncInput) -> Result<bool, String> {
     }
 
     if let Some(r) = remote.as_deref() {
-        let pull_url = match token_ref {
-            Some(t) => make_auth_url(r, t),
+        let pull_url = match &creds {
+            Some(c) => c.auth_url(r),
             None => "origin".into(),
         };
         let has_changes = run_git(&["status", "--porcelain"], p, None);
@@ -394,8 +394,8 @@ pub async fn git_sync(args: GitSyncInput) -> Result<bool, String> {
         ok_or_err(run_git(&["commit", "-m", &msg], p, None))?;
     }
     if let Some(r) = remote.as_deref() {
-        let push_url = match token_ref {
-            Some(t) => make_auth_url(r, t),
+        let push_url = match &creds {
+            Some(c) => c.auth_url(r),
             None => "origin".into(),
         };
         let _ = run_git(&["push", "-u", &push_url, &branch], p, token_ref);
@@ -413,17 +413,17 @@ pub struct GitDirVaultInput {
 #[tauri::command]
 pub async fn git_pull(args: GitDirVaultInput) -> Result<bool, String> {
     let p = Path::new(&args.dir);
-    let token = token_for_vault(args.vault_id.as_deref());
+    let creds = credentials_for_vault(args.vault_id.as_deref());
     let branch = current_branch(p);
     let has_changes = run_git(&["status", "--porcelain"], p, None);
     let needs_stash = has_changes.success && !has_changes.stdout.is_empty();
     if needs_stash {
         ok_or_err(run_git(&["stash", "push", "-m", "noteriv-pull-stash"], p, None))?;
     }
-    let result = if let Some(t) = token.as_deref() {
+    let result = if let Some(c) = creds.as_ref() {
         let remote = ok_or_err(run_git(&["remote", "get-url", "origin"], p, None))?;
-        let auth = make_auth_url(&remote, t);
-        run_git(&["pull", &auth, &branch, "--rebase"], p, Some(t))
+        let auth = c.auth_url(&remote);
+        run_git(&["pull", &auth, &branch, "--rebase"], p, Some(&c.token))
     } else {
         run_git(&["pull", "origin", &branch, "--rebase"], p, None)
     };
@@ -439,11 +439,11 @@ pub async fn git_pull(args: GitDirVaultInput) -> Result<bool, String> {
 #[tauri::command]
 pub async fn git_fetch(args: GitDirVaultInput) -> Result<bool, String> {
     let p = Path::new(&args.dir);
-    let token = token_for_vault(args.vault_id.as_deref());
-    let res = if let Some(t) = token.as_deref() {
+    let creds = credentials_for_vault(args.vault_id.as_deref());
+    let res = if let Some(c) = creds.as_ref() {
         let remote = ok_or_err(run_git(&["remote", "get-url", "origin"], p, None))?;
-        let auth = make_auth_url(&remote, t);
-        run_git(&["fetch", &auth], p, Some(t))
+        let auth = c.auth_url(&remote);
+        run_git(&["fetch", &auth], p, Some(&c.token))
     } else {
         run_git(&["fetch", "origin"], p, None)
     };
@@ -514,10 +514,10 @@ pub async fn git_clone(args: GitCloneInput) -> Result<bool, String> {
         .ok_or_else(|| "invalid clone target name".to_string())?;
     let _ = fs::create_dir_all(parent);
 
-    let token = token_for_vault(args.vault_id.as_deref());
-    if let Some(t) = token.as_deref() {
-        let auth = make_auth_url(&args.url, t);
-        ok_or_err(run_git(&["clone", &auth, &folder_name], parent, Some(t)))?;
+    let creds = credentials_for_vault(args.vault_id.as_deref());
+    if let Some(c) = creds.as_ref() {
+        let auth = c.auth_url(&args.url);
+        ok_or_err(run_git(&["clone", &auth, &folder_name], parent, Some(&c.token)))?;
         ok_or_err(run_git(
             &["remote", "set-url", "origin", &args.url],
             &target,

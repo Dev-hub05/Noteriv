@@ -84,7 +84,7 @@ pub const SHIM_JS: &str = r#"
       setActiveVault: function (id) { return invoke("vault_set_active", { id: id }); },
 
       // ---- auth
-      authSaveToken: function (vaultId, token) { return invoke("auth_save_token", { args: { vaultId: vaultId, token: token } }); },
+      authSaveToken: function (vaultId, token, username) { return invoke("auth_save_token", { args: { vaultId: vaultId, token: token, username: username } }); },
       authHasToken: function (vaultId) { return invoke("auth_has_token", { vaultId: vaultId }); },
       authRemoveToken: function (vaultId) { return invoke("auth_remove_token", { vaultId: vaultId }); },
       authValidateToken: function (token) { return invoke("auth_validate_token", { token: token }); },

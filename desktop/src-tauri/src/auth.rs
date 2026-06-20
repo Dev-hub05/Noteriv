@@ -99,13 +99,35 @@ fn fallback_save(map: &HashMap<String, String>) {
     }
 }
 
-pub fn save_token_internal(vault_id: &str, token: &str) {
+/// Credentials for HTTPS git auth. `username` is the value sent before the
+/// token: "oauth2" for GitHub/GitLab, your login for Gitea/Forgejo,
+/// "x-token-auth" for Bitbucket. An empty username falls back to "oauth2".
+#[derive(Clone)]
+pub struct GitCredentials {
+    pub username: String,
+    pub token: String,
+}
+
+impl GitCredentials {
+    /// Build an authenticated HTTPS clone/pull/push URL for `remote`.
+    pub fn auth_url(&self, remote: &str) -> String {
+        make_auth_url(remote, &self.username, &self.token)
+    }
+}
+
+pub fn save_credentials_internal(vault_id: &str, username: &str, token: &str) {
     let mut map = fallback_load();
-    map.insert(vault_id.into(), B64.encode(token));
+    let envelope = serde_json::json!({ "u": username, "t": token }).to_string();
+    map.insert(vault_id.into(), B64.encode(envelope));
     fallback_save(&map);
 }
 
-pub fn get_token(vault_id: &str) -> Option<String> {
+/// Back-compat helper for the token-only migration path (no username).
+pub fn save_token_internal(vault_id: &str, token: &str) {
+    save_credentials_internal(vault_id, "", token);
+}
+
+pub fn get_credentials(vault_id: &str) -> Option<GitCredentials> {
     let map = fallback_load();
     let raw = map.get(vault_id)?;
     if raw.is_empty() {
@@ -113,7 +135,24 @@ pub fn get_token(vault_id: &str) -> Option<String> {
     }
     let decoded = B64.decode(raw.as_bytes()).ok()?;
     let s = String::from_utf8(decoded).ok()?;
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        return None;
+    }
+    // New format: a JSON envelope { "u": username, "t": token }.
+    if let Ok(v) = serde_json::from_str::<Value>(&s) {
+        if let Some(t) = v.get("t").and_then(|x| x.as_str()) {
+            if !t.is_empty() {
+                let u = v.get("u").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                return Some(GitCredentials { username: u, token: t.to_string() });
+            }
+        }
+    }
+    // Legacy format: the whole string is a bare token (e.g. an old GitHub PAT).
+    Some(GitCredentials { username: String::new(), token: s })
+}
+
+pub fn get_token(vault_id: &str) -> Option<String> {
+    get_credentials(vault_id).map(|c| c.token)
 }
 
 pub fn remove_token(vault_id: &str) -> bool {
@@ -132,11 +171,18 @@ pub struct SaveTokenInput {
     #[serde(rename = "vaultId")]
     pub vault_id: String,
     pub token: String,
+    /// Auth username (optional). Defaults to "oauth2" when omitted/blank.
+    #[serde(default)]
+    pub username: Option<String>,
 }
 
 #[tauri::command]
 pub async fn auth_save_token(args: SaveTokenInput) -> bool {
-    save_token_internal(&args.vault_id, &args.token);
+    save_credentials_internal(
+        &args.vault_id,
+        args.username.as_deref().unwrap_or(""),
+        &args.token,
+    );
     true
 }
 
@@ -344,16 +390,19 @@ fn ssh_to_https(remote: &str) -> Option<String> {
     None
 }
 
-/// Build an authenticated git URL (`https://oauth2:TOKEN@github.com/...`).
-/// If `remote_url` is SSH, rewrite to HTTPS first — PATs can't auth SSH.
-pub fn make_auth_url(remote_url: &str, token: &str) -> String {
+/// Build an authenticated git URL (`https://USERNAME:TOKEN@host/...`). The
+/// username defaults to "oauth2" (works for GitHub and GitLab); pass a login
+/// for Gitea/Forgejo or "x-token-auth" for Bitbucket. If `remote_url` is SSH,
+/// rewrite to HTTPS first — PATs can't auth SSH.
+pub fn make_auth_url(remote_url: &str, username: &str, token: &str) -> String {
     if token.is_empty() {
         return remote_url.to_string();
     }
     let working = ssh_to_https(remote_url).unwrap_or_else(|| remote_url.to_string());
     if let Ok(mut url) = url::Url::parse(&working) {
         if url.scheme() == "https" {
-            let _ = url.set_username("oauth2");
+            let user = if username.is_empty() { "oauth2" } else { username };
+            let _ = url.set_username(user);
             let _ = url.set_password(Some(token));
             return url.to_string();
         }
@@ -361,6 +410,58 @@ pub fn make_auth_url(remote_url: &str, token: &str) -> String {
     remote_url.to_string()
 }
 
-pub fn token_for_vault(vault_id: Option<&str>) -> Option<String> {
-    vault_id.and_then(get_token)
+pub fn credentials_for_vault(vault_id: Option<&str>) -> Option<GitCredentials> {
+    vault_id.and_then(get_credentials)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::make_auth_url;
+
+    #[test]
+    fn empty_token_leaves_url_untouched() {
+        assert_eq!(make_auth_url("https://github.com/u/r.git", "", ""), "https://github.com/u/r.git");
+    }
+
+    #[test]
+    fn blank_username_defaults_to_oauth2() {
+        // Works for GitHub and GitLab.
+        assert_eq!(
+            make_auth_url("https://gitlab.com/u/r.git", "", "glpat-xyz"),
+            "https://oauth2:glpat-xyz@gitlab.com/u/r.git"
+        );
+    }
+
+    #[test]
+    fn explicit_username_is_used() {
+        // Gitea/Forgejo want <login>:<token>.
+        assert_eq!(
+            make_auth_url("https://forgejo.example.com/u/r.git", "alice", "tok"),
+            "https://alice:tok@forgejo.example.com/u/r.git"
+        );
+    }
+
+    #[test]
+    fn bitbucket_token_username() {
+        assert_eq!(
+            make_auth_url("https://bitbucket.org/u/r.git", "x-token-auth", "tok"),
+            "https://x-token-auth:tok@bitbucket.org/u/r.git"
+        );
+    }
+
+    #[test]
+    fn ssh_remote_rewritten_to_https_when_token_present() {
+        assert_eq!(
+            make_auth_url("git@gitlab.com:u/r.git", "", "tok"),
+            "https://oauth2:tok@gitlab.com/u/r.git"
+        );
+    }
+
+    #[test]
+    fn self_hosted_host_preserved() {
+        assert_eq!(
+            make_auth_url("https://git.mycorp.internal/team/notes.git", "ci", "tok"),
+            "https://ci:tok@git.mycorp.internal/team/notes.git"
+        );
+    }
 }
