@@ -1083,7 +1083,13 @@ export default function Home() {
       if (!anchor) return;
 
       const href = anchor.getAttribute("href");
-      if (!href || (!href.startsWith("http://") && !href.startsWith("https://"))) return;
+      if (
+        !href ||
+        (!href.startsWith("http://") &&
+          !href.startsWith("https://") &&
+          !href.startsWith("mailto:"))
+      )
+        return;
 
       e.preventDefault();
       e.stopImmediatePropagation();
@@ -1498,6 +1504,7 @@ export default function Home() {
       window.electronAPI.onMenuSaveAs(handleSaveAs),
       window.electronAPI.onMenuNewFile(handleNewFile),
       window.electronAPI.onMenuOpenFile(handleOpenFile),
+      window.electronAPI.onMenuSettings(() => setShowSettings(true)),
     ];
     return () => cleanups.forEach((fn) => fn());
   }, [appState, handleSave, handleSaveAs, handleNewFile, handleOpenFile]);

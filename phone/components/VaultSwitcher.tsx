@@ -11,7 +11,9 @@ import {
   Alert,
   Animated,
   Platform,
+  Keyboard,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/context/ThemeContext';
 import { useApp } from '@/context/AppContext';
@@ -24,11 +26,13 @@ interface VaultSwitcherProps {
 
 export default function VaultSwitcher({ visible, onClose }: VaultSwitcherProps) {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const { vaults, vault, switchVault, createVault, deleteVault } = useApp();
   const [showCreate, setShowCreate] = useState(false);
   const [newVaultName, setNewVaultName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [swipedId, setSwipedId] = useState<string | null>(null);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const inputRef = useRef<TextInput>(null);
 
   useEffect(() => {
@@ -38,6 +42,26 @@ export default function VaultSwitcher({ visible, onClose }: VaultSwitcherProps) 
       setSwipedId(null);
     }
   }, [visible]);
+
+  // Manually track the keyboard height and lift the sheet by that amount.
+  // KeyboardAvoidingView is unreliable inside a Modal on Android (especially
+  // with edge-to-edge enabled), since the Modal is a separate window that
+  // doesn't receive soft-input resizing. Tracking the height ourselves works
+  // consistently on both platforms.
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvent, (e) => {
+      setKeyboardHeight(e.endCoordinates?.height ?? 0);
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   useEffect(() => {
     if (showCreate) {
@@ -177,7 +201,7 @@ export default function VaultSwitcher({ visible, onClose }: VaultSwitcherProps) 
       animationType="slide"
       onRequestClose={onClose}
     >
-      <View style={styles.container}>
+      <View style={[styles.container, { paddingBottom: keyboardHeight }]}>
         <Pressable style={styles.backdrop} onPress={onClose} />
 
         <View style={[styles.sheet, { backgroundColor: colors.bgPrimary }]}>
@@ -270,8 +294,10 @@ export default function VaultSwitcher({ visible, onClose }: VaultSwitcherProps) 
             </TouchableOpacity>
           )}
 
-          {/* Bottom padding for safe area */}
-          <View style={styles.bottomPadding} />
+          {/* Bottom padding for safe area (clears the Android nav bar / iOS home
+              indicator). Collapsed while the keyboard is up, since the container's
+              paddingBottom already lifts the sheet clear of the keyboard. */}
+          <View style={{ height: keyboardHeight > 0 ? 8 : Math.max(insets.bottom, 16) }} />
         </View>
       </View>
     </Modal>
@@ -444,8 +470,5 @@ const styles = StyleSheet.create({
   createButtonText: {
     fontSize: 15,
     fontWeight: '600',
-  },
-  bottomPadding: {
-    height: Platform.OS === 'ios' ? 34 : 16,
   },
 });

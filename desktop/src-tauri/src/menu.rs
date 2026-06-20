@@ -1,7 +1,7 @@
 // Hidden menu — kept only so keyboard accelerators (Cmd/Ctrl+S, etc.) emit
 // the same menu:* events the renderer already listens for.
 
-use tauri::menu::{AboutMetadataBuilder, Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::{Emitter, Manager, WebviewWindow};
 
 pub fn install(window: &WebviewWindow) -> tauri::Result<()> {
@@ -20,15 +20,19 @@ pub fn install(window: &WebviewWindow) -> tauri::Result<()> {
         .accelerator("CmdOrCtrl+Shift+S")
         .build(app)?;
 
-    let file_menu = SubmenuBuilder::new(app, "File")
+    // On macOS, Quit lives in the application menu (below); elsewhere it stays here.
+    #[allow(unused_mut)]
+    let mut file_builder = SubmenuBuilder::new(app, "File")
         .item(&new_file)
         .item(&open_file)
         .separator()
         .item(&save)
-        .item(&save_as)
-        .separator()
-        .quit()
-        .build()?;
+        .item(&save_as);
+    #[cfg(not(target_os = "macos"))]
+    {
+        file_builder = file_builder.separator().quit();
+    }
+    let file_menu = file_builder.build()?;
 
     let edit_menu = SubmenuBuilder::new(app, "Edit")
         .undo()
@@ -75,10 +79,44 @@ pub fn install(window: &WebviewWindow) -> tauri::Result<()> {
         )
         .build()?;
 
-    let _ = AboutMetadataBuilder::new(); // hush unused-import warning
-    let menu: Menu<_> = MenuBuilder::new(app)
-        .items(&[&file_menu, &edit_menu, &view_menu])
-        .build()?;
+    // macOS application menu (the first submenu becomes the app menu). This is
+    // where the platform's standard items live: About, Settings (Cmd+,), Hide
+    // (Cmd+H), Hide Others (Cmd+Opt+H), Show All, and Quit (Cmd+Q). The Hide /
+    // Show roles are native — the renderer never sees them — while Settings
+    // emits `menu:settings` like the other accelerators.
+    #[cfg(target_os = "macos")]
+    let app_menu = {
+        use tauri::menu::AboutMetadataBuilder;
+        let about = AboutMetadataBuilder::new()
+            .name(Some("Noteriv"))
+            .version(Some(env!("CARGO_PKG_VERSION")))
+            .build();
+        let settings = MenuItemBuilder::with_id("menu:settings", "Settings…")
+            .accelerator("Cmd+,")
+            .build(app)?;
+        SubmenuBuilder::new(app, "Noteriv")
+            .about(Some(about))
+            .separator()
+            .item(&settings)
+            .separator()
+            .services()
+            .separator()
+            .hide()
+            .hide_others()
+            .show_all()
+            .separator()
+            .quit()
+            .build()?
+    };
+
+    let menu: Menu<_> = {
+        let builder = MenuBuilder::new(app);
+        #[cfg(target_os = "macos")]
+        let builder = builder.items(&[&app_menu, &file_menu, &edit_menu, &view_menu]);
+        #[cfg(not(target_os = "macos"))]
+        let builder = builder.items(&[&file_menu, &edit_menu, &view_menu]);
+        builder.build()?
+    };
 
     app.set_menu(menu)?;
     // Hide the menu bar (we render our own titlebar; menu exists only for accelerators).

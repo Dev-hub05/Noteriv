@@ -175,10 +175,57 @@ function inlineFormat(text: string): string {
   // Strikethrough: ~~text~~
   result = result.replace(/~~(.+?)~~/g, "<del>$1</del>");
 
+  // Autolink bare URLs and emails. Runs after [text](url)/images so the
+  // lookbehind can skip URLs already inside an href="" or anchor text (">…").
+  result = autolink(result);
+
   // Line breaks
   result = result.replace(/\n/g, "<br>");
 
   return result;
+}
+
+/**
+ * Trim trailing sentence punctuation from a matched URL, keeping balanced
+ * parentheses that are part of the URL (e.g. /Foo_(bar)).
+ */
+function trimUrlEnd(url: string): string {
+  let end = url.length;
+  while (end > 0) {
+    const ch = url[end - 1];
+    if (".,;:!?\"'".includes(ch)) {
+      end--;
+      continue;
+    }
+    if (ch === ")") {
+      const slice = url.slice(0, end);
+      const opens = (slice.match(/\(/g) || []).length;
+      const closes = (slice.match(/\)/g) || []).length;
+      if (closes > opens) {
+        end--;
+        continue;
+      }
+    }
+    break;
+  }
+  return url.slice(0, end);
+}
+
+/**
+ * Wrap bare http(s) URLs and email addresses in anchor tags. URLs/emails that
+ * are already inside a tag (href attribute or anchor text) are skipped via the
+ * lookbehinds.
+ */
+function autolink(text: string): string {
+  let out = text.replace(/(?<!["'>])\bhttps?:\/\/[^\s<>"'`]+/g, (m) => {
+    const url = trimUrlEnd(m);
+    return `<a href="${url}">${url}</a>${m.slice(url.length)}`;
+  });
+  out = out.replace(
+    /(?<![\w.@:/="'>])[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g,
+    (m) => `<a href="mailto:${m}">${m}</a>`
+  );
+  return out;
 }
 
 /**

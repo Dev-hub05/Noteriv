@@ -9,6 +9,7 @@ export { footnoteDefRenderer, footnoteRefRenderer } from "./footnotes";
 export { definitionListRenderer } from "./definition-lists";
 export { imageRenderer } from "./images";
 export { linkRenderer } from "./links";
+export { autolinkRenderer } from "./autolinks";
 export { wikilinkRenderer, embedRenderer } from "./wikilinks";
 export { highlightRenderer, superscriptRenderer, subscriptRenderer } from "./highlight";
 export { inlineMathRenderer, MathBlockTracker } from "./math";
@@ -29,6 +30,7 @@ import { footnoteDefRenderer, footnoteRefRenderer } from "./footnotes";
 import { definitionListRenderer } from "./definition-lists";
 import { imageRenderer } from "./images";
 import { linkRenderer } from "./links";
+import { autolinkRenderer } from "./autolinks";
 import { wikilinkRenderer, embedRenderer } from "./wikilinks";
 import { highlightRenderer, superscriptRenderer, subscriptRenderer } from "./highlight";
 import { inlineMathRenderer } from "./math";
@@ -63,6 +65,7 @@ export function registerBuiltinRenderers() {
   registerInlineRenderer(inlineMathRenderer);     // 15
   registerInlineRenderer(linkRenderer);           // 20
   registerInlineRenderer(highlightRenderer);      // 45
+  registerInlineRenderer(autolinkRenderer);       // 55 (registered here; sorted by priority)
   registerInlineRenderer(superscriptRenderer);    // 46
   registerInlineRenderer(subscriptRenderer);      // 47
   for (const r of inlineRenderers) {              // 50

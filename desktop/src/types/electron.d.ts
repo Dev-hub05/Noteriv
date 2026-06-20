@@ -206,6 +206,7 @@ interface ElectronAPI {
   onMenuNewFile: (callback: () => void) => () => void;
   onMenuOpenFile: (callback: () => void) => () => void;
   onMenuOpenFolder: (callback: () => void) => () => void;
+  onMenuSettings: (callback: () => void) => () => void;
 }
 
 // Extend Window with electronAPI

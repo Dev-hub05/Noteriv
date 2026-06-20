@@ -156,6 +156,7 @@ pub const SHIM_JS: &str = r#"
       onMenuNewFile: function (cb) { return on("menu:new-file", function () { return undefined; }); },
       onMenuOpenFile: function (cb) { return on("menu:open-file", function () { return undefined; }); },
       onMenuOpenFolder: function (cb) { return on("menu:open-folder", function () { return undefined; }); },
+      onMenuSettings: function (cb) { return on("menu:settings", function () { return undefined; }); },
     };
 
     // The original menu listeners ignore payload; rewire them to pass the user
@@ -172,6 +173,7 @@ pub const SHIM_JS: &str = r#"
     rebindMenu("onMenuNewFile", "menu:new-file");
     rebindMenu("onMenuOpenFile", "menu:open-file");
     rebindMenu("onMenuOpenFolder", "menu:open-folder");
+    rebindMenu("onMenuSettings", "menu:settings");
 
     Object.defineProperty(window, "electronAPI", { value: api, writable: false, configurable: false });
 
