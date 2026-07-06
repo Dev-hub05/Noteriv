@@ -129,10 +129,9 @@ pub fn kriya_get_session_status(
 ///   4. Emit "kriya:dispatch-action" event to React with { request_id, action_name, arguments }
 ///   5. Await the oneshot receiver (React will call kriya_dispatch_result when done)
 ///   6. Return the result
-#[tauri::command]
-pub async fn kriya_execute_action(
+pub async fn execute_action_internal(
     app: AppHandle,
-    dispatch_state: State<'_, KriyaDispatchState>,
+    dispatch_state: &KriyaDispatchState,
     action_name: String,
     arguments: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
@@ -172,6 +171,16 @@ pub async fn kriya_execute_action(
     }))
 }
 
+#[tauri::command]
+pub async fn kriya_execute_action(
+    app: AppHandle,
+    dispatch_state: State<'_, KriyaDispatchState>,
+    action_name: String,
+    arguments: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    execute_action_internal(app, &dispatch_state, action_name, arguments).await
+}
+
 /// Called by React dispatcher to return the result of an executed action.
 #[tauri::command]
 pub fn kriya_dispatch_result(
@@ -196,5 +205,23 @@ pub fn kriya_register_action_metadata(
     let registry = crate::kriya::action_registry::get_registry();
     let mut reg_lock = registry.lock().map_err(|e| e.to_string())?;
     reg_lock.register(metadata);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn kriya_run_agent(
+    app: AppHandle,
+    state: State<'_, KriyaState>,
+    dispatch_state: State<'_, KriyaDispatchState>,
+    session_id: String,
+    backend_config: crate::kriya::inference::InferenceConfig,
+) -> Result<(), String> {
+    crate::kriya::agent_loop::run_agent_loop(
+        app,
+        state,
+        dispatch_state,
+        session_id,
+        backend_config,
+    );
     Ok(())
 }

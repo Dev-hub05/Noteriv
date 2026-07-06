@@ -145,6 +145,7 @@ pub fn run() {
             kriya::commands::kriya_execute_action,
             kriya::commands::kriya_register_action_metadata,
             kriya::commands::kriya_dispatch_result,
+            kriya::commands::kriya_run_agent,
         ])
         .setup(|app| {
             // Inject the window.electronAPI shim so unmodified renderer code works.
