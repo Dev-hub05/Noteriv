@@ -34,6 +34,18 @@ impl Default for KriyaDispatchState {
     }
 }
 
+pub struct KriyaApprovalState {
+    pub pending: Mutex<HashMap<String, oneshot::Sender<bool>>>,
+}
+
+impl Default for KriyaApprovalState {
+    fn default() -> Self {
+        Self {
+            pending: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
 #[tauri::command]
 pub fn kriya_start_session(
     state: State<'_, KriyaState>,
@@ -124,14 +136,17 @@ pub fn kriya_get_session_status(
 ///
 /// Flow:
 ///   1. Validate args against schema in Rust registry
-///   2. Generate a unique request_id
-///   3. Create a oneshot channel and store the sender in KriyaDispatchState
-///   4. Emit "kriya:dispatch-action" event to React with { request_id, action_name, arguments }
-///   5. Await the oneshot receiver (React will call kriya_dispatch_result when done)
-///   6. Return the result
+///   2. Evaluate governance policy (Permission & Budget)
+///   3. Await user confirmation if action is Dangerous
+///   4. Generate audit receipt signature
+///   5. Create a oneshot channel and store the sender in KriyaDispatchState
+///   6. Emit "kriya:dispatch-action" event to React with request_id, action_name, arguments, and signature
+///   7. Await the oneshot receiver (React will call kriya_dispatch_result when done)
+///   8. Return the result
 pub async fn execute_action_internal(
     app: AppHandle,
     dispatch_state: &KriyaDispatchState,
+    session_id: Option<String>,
     action_name: String,
     arguments: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
@@ -142,32 +157,68 @@ pub async fn execute_action_internal(
         reg_lock.validate_args(&action_name, &arguments)?;
     }
 
-    // Step 2: Generate request_id
+    // Step 2: Evaluate governance policy (Permission & Budget)
+    let sess_id = session_id.as_deref().unwrap_or("direct");
+    let safety_level = crate::kriya::governance::get_governance_engine()
+        .evaluate_action(sess_id, &action_name)?;
+
     let request_id = format!("req_{}", rand::thread_rng().gen::<u64>());
 
-    // Step 3: Create oneshot channel
+    // Step 3: Await user confirmation if action is Dangerous
+    if safety_level == crate::kriya::governance::ActionSafetyLevel::Dangerous {
+        log::warn!("Kriya action '{}' requires human approval (request_id: {})", action_name, request_id);
+        
+        let (tx, rx) = oneshot::channel::<bool>();
+        {
+            let approval_state = app.state::<KriyaApprovalState>();
+            let mut pending = approval_state.pending.lock().map_err(|e| e.to_string())?;
+            pending.insert(request_id.clone(), tx);
+        }
+
+        // Emit approval request event to React UI
+        app.emit("kriya:request-approval", serde_json::json!({
+            "request_id": request_id,
+            "action_name": action_name,
+            "arguments": arguments,
+        })).map_err(|e| format!("Failed to emit approval request event: {}", e))?;
+
+        // Block-await human approval response
+        let approved = rx.await.map_err(|_| "Approval loop aborted".to_string())?;
+        if !approved {
+            return Err("Action rejected by user".to_string());
+        }
+        log::info!("Kriya action '{}' approved by user.", action_name);
+    }
+
+    // Step 4: Generate compliance audit signature
+    let signature = crate::kriya::governance::get_governance_engine()
+        .sign_audit_receipt(&action_name, &request_id);
+
+    // Step 5: Create oneshot channel for dispatch execution
     let (tx, rx) = oneshot::channel::<AgentActionResult>();
     {
         let mut pending = dispatch_state.pending.lock().map_err(|e| e.to_string())?;
         pending.insert(request_id.clone(), tx);
     }
 
-    // Step 4: Emit dispatch event to React
+    // Step 6: Emit dispatch event to React
     log::info!("Kriya dispatching action '{}' (request_id: {})", action_name, request_id);
     app.emit("kriya:dispatch-action", serde_json::json!({
         "request_id": request_id,
         "action_name": action_name,
         "arguments": arguments,
+        "signature": signature,
     })).map_err(|e| format!("Failed to emit dispatch event: {}", e))?;
 
-    // Step 5: Await result from React
+    // Step 7: Await result from React
     let result = rx.await.map_err(|_| "Dispatch channel closed — React handler did not respond".to_string())?;
 
-    // Step 6: Return
+    // Step 8: Return
     Ok(serde_json::json!({
         "status": result.status,
         "output": result.output,
         "error_message": result.error_message,
+        "signature": signature,
     }))
 }
 
@@ -178,7 +229,7 @@ pub async fn kriya_execute_action(
     action_name: String,
     arguments: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    execute_action_internal(app, &dispatch_state, action_name, arguments).await
+    execute_action_internal(app, &dispatch_state, None, action_name, arguments).await
 }
 
 /// Called by React dispatcher to return the result of an executed action.
@@ -195,6 +246,23 @@ pub fn kriya_dispatch_result(
         Ok(())
     } else {
         Err(format!("No pending dispatch found for request_id: {}", request_id))
+    }
+}
+
+/// Called by React Approval Modal to submit user confirmation.
+#[tauri::command]
+pub fn kriya_submit_approval(
+    approval_state: State<'_, KriyaApprovalState>,
+    request_id: String,
+    approved: bool,
+) -> Result<(), String> {
+    let mut pending = approval_state.pending.lock().map_err(|e| e.to_string())?;
+    if let Some(sender) = pending.remove(&request_id) {
+        let _ = sender.send(approved);
+        log::info!("Kriya approval submitted for request_id: {}. Approved: {}", request_id, approved);
+        Ok(())
+    } else {
+        Err(format!("No pending approval found for request_id: {}", request_id))
     }
 }
 

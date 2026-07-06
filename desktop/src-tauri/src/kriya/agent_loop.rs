@@ -212,9 +212,15 @@ pub fn run_agent_loop(
                 let val_res = execute_action_internal(
                     app.clone(),
                     &dispatch_clone,
+                    Some(session_id.clone()),
                     action_req.action_name.clone(),
                     action_req.arguments.clone(),
                 ).await;
+
+                let signature = match &val_res {
+                    Ok(val) => val.get("signature").and_then(|s| s.as_str()).map(|s| s.to_string()),
+                    Err(_) => None,
+                };
 
                 let action_res = match val_res {
                     Ok(val) => AgentActionResult {
@@ -239,7 +245,7 @@ pub fn run_agent_loop(
                             action_name: action_req.action_name,
                             arguments: action_req.arguments,
                             result: action_res,
-                            signature: None,
+                            signature,
                         };
                         sess.history.push(receipt);
                     }

@@ -216,6 +216,7 @@ interface ElectronAPI {
   kriyaRegisterActionMetadata: (metadata: { name: string; description: string; schema: any }) => Promise<void>;
   kriyaDispatchResult: (requestId: string, result: any) => Promise<void>;
   kriyaRunAgent: (sessionId: string, backendConfig: { type: 'mock' | 'ollama' | 'anthropic'; model?: string; host?: string; api_key?: string }) => Promise<void>;
+  kriyaSubmitApproval: (requestId: string, approved: boolean) => Promise<void>;
 }
 
 // Extend Window with electronAPI

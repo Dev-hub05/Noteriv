@@ -48,6 +48,7 @@ pub fn run() {
         .manage(app_state)
         .manage(kriya::KriyaState::default())
         .manage(kriya::KriyaDispatchState::default())
+        .manage(kriya::KriyaApprovalState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
@@ -146,6 +147,7 @@ pub fn run() {
             kriya::commands::kriya_register_action_metadata,
             kriya::commands::kriya_dispatch_result,
             kriya::commands::kriya_run_agent,
+            kriya::commands::kriya_submit_approval,
         ])
         .setup(|app| {
             // Inject the window.electronAPI shim so unmodified renderer code works.

@@ -1,0 +1,14 @@
+{
+  "read_note": {
+    "safety_level": "safe",
+    "step_cost": 0.1
+  },
+  "list_notes": {
+    "safety_level": "restricted",
+    "step_cost": 0.2
+  },
+  "write_note": {
+    "safety_level": "dangerous",
+    "step_cost": 1.0
+  }
+}
