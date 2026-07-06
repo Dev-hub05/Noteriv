@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
 import Sidebar from "@/components/Sidebar";
 import TitleBar from "@/components/TitleBar";
+import KriyaInspector from "@/components/KriyaInspector";
 import SetupWizard from "@/components/SetupWizard";
 import DocumentTitle from "@/components/DocumentTitle";
 import SplitPane from "@/components/SplitPane";
@@ -162,6 +163,7 @@ export default function Home() {
   const [showTimeScrubber, setShowTimeScrubber] = useState(false);
   const [showLintPanel, setShowLintPanel] = useState(false);
   const [showVaultInsights, setShowVaultInsights] = useState(false);
+  const [showKriya, setShowKriya] = useState(false);
   const [recentCommands, setRecentCommands] = useState<HotkeyAction[]>([]);
   const [pluginInstances, setPluginInstances] = useState<PluginInstance[]>([]);
   const [cssSnippets, setCSSSnippets] = useState<CSSSnippet[]>([]);
@@ -1666,6 +1668,12 @@ export default function Home() {
                   <path d="M8 11v3M5 14h6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 </svg>
               </button>
+              <button className="ribbon-btn" title="Kriya Agent" onClick={() => setShowKriya(true)}>
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M8 2a4 4 0 00-4 4c0 1.5.8 2.8 2 3.5V11h4V9.5c1.2-.7 2-2 2-3.5a4 4 0 00-4-4z" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M6 14h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                </svg>
+              </button>
             </div>
             <div className="ribbon-bottom">
               <button className="ribbon-btn" title="Settings" onClick={() => setShowSettings(true)}>
@@ -2162,6 +2170,12 @@ export default function Home() {
           onClose={() => setShowVaultInsights(false)}
         />
       )}
+
+      {/* Kriya Inspector */}
+      <KriyaInspector
+        isOpen={showKriya}
+        onClose={() => setShowKriya(false)}
+      />
     </div>
   );
 }

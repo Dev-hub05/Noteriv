@@ -217,9 +217,13 @@ interface ElectronAPI {
   kriyaDispatchResult: (requestId: string, result: any) => Promise<void>;
   kriyaRunAgent: (sessionId: string, backendConfig: { type: 'mock' | 'ollama' | 'anthropic'; model?: string; host?: string; api_key?: string }) => Promise<void>;
   kriyaSubmitApproval: (requestId: string, approved: boolean) => Promise<void>;
+  kriyaMemoryStore: (sessionId: string, category: 'episodic' | 'semantic' | 'procedural', content: string, metadata: any, relevance?: number) => Promise<string>;
+  kriyaMemoryRecall: (query: string, category?: 'episodic' | 'semantic' | 'procedural', limit?: number) => Promise<any>;
+  kriyaMemoryStats: () => Promise<any>;
 }
 
 // Extend Window with electronAPI
 interface Window {
   electronAPI: ElectronAPI;
+  __TAURI__?: any;
 }

@@ -61,6 +61,9 @@ pub fn kriya_start_session(
         step_count: 0,
     };
 
+    // Initialize persistent memory for this vault
+    crate::kriya::memory::get_memory().initialize(&request.vault_path);
+
     let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
     sessions.insert(session_id.clone(), session);
     
@@ -292,4 +295,41 @@ pub fn kriya_run_agent(
         backend_config,
     );
     Ok(())
+}
+
+#[tauri::command]
+pub fn kriya_memory_store(
+    session_id: String,
+    category: crate::kriya::memory::MemoryCategory,
+    content: String,
+    metadata: serde_json::Value,
+    relevance: Option<f64>,
+) -> Result<String, String> {
+    let id = crate::kriya::memory::get_memory().store_entry(
+        &session_id,
+        category,
+        content,
+        metadata,
+        relevance.unwrap_or(1.0),
+    );
+    Ok(id)
+}
+
+#[tauri::command]
+pub fn kriya_memory_recall(
+    query: String,
+    category: Option<crate::kriya::memory::MemoryCategory>,
+    limit: Option<usize>,
+) -> Result<serde_json::Value, String> {
+    let results = crate::kriya::memory::get_memory().recall(
+        &query,
+        category,
+        limit.unwrap_or(10),
+    );
+    serde_json::to_value(&results).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn kriya_memory_stats() -> Result<serde_json::Value, String> {
+    Ok(crate::kriya::memory::get_memory().get_stats())
 }

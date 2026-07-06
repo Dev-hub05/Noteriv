@@ -167,6 +167,9 @@ pub const SHIM_JS: &str = r#"
       kriyaDispatchResult: function (requestId, result) { return invoke("kriya_dispatch_result", { requestId: requestId, result: result }); },
       kriyaRunAgent: function (sessionId, backendConfig) { return invoke("kriya_run_agent", { sessionId: sessionId, backendConfig: backendConfig }); },
       kriyaSubmitApproval: function (requestId, approved) { return invoke("kriya_submit_approval", { requestId: requestId, approved: approved }); },
+      kriyaMemoryStore: function (sessionId, category, content, metadata, relevance) { return invoke("kriya_memory_store", { sessionId: sessionId, category: category, content: content, metadata: metadata, relevance: relevance }); },
+      kriyaMemoryRecall: function (query, category, limit) { return invoke("kriya_memory_recall", { query: query, category: category, limit: limit }); },
+      kriyaMemoryStats: function () { return invoke("kriya_memory_stats", {}); },
     };
 
     // The original menu listeners ignore payload; rewire them to pass the user
