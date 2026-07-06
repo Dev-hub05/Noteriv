@@ -142,6 +142,7 @@ pub fn run() {
             kriya::commands::kriya_submit_step,
             kriya::commands::kriya_get_session_status,
             kriya::commands::kriya_execute_action,
+            kriya::commands::kriya_register_action_metadata,
         ])
         .setup(|app| {
             // Inject the window.electronAPI shim so unmodified renderer code works.

@@ -213,6 +213,7 @@ interface ElectronAPI {
   kriyaSubmitStep: (sessionId: string, result?: any | null) => Promise<{ thought: string; action: any | null; final_answer: string | null }>;
   kriyaGetSessionStatus: (sessionId: string) => Promise<any>;
   kriyaExecuteAction: (actionName: string, args: any) => Promise<any>;
+  kriyaRegisterActionMetadata: (metadata: { name: string; description: string; schema: any }) => Promise<void>;
 }
 
 // Extend Window with electronAPI

@@ -114,5 +114,25 @@ pub fn kriya_execute_action(
 ) -> Result<serde_json::Value, String> {
     let registry = crate::kriya::action_registry::get_registry();
     let reg_lock = registry.lock().map_err(|e| e.to_string())?;
-    reg_lock.execute(&action_name, arguments)
+    
+    // Validate arguments against schema
+    reg_lock.validate_args(&action_name, &arguments)?;
+    
+    log::info!("Kriya action '{}' validated on Host.", action_name);
+    
+    Ok(serde_json::json!({
+        "status": "validated_successfully",
+        "action_name": action_name,
+        "arguments": arguments,
+    }))
+}
+
+#[tauri::command]
+pub fn kriya_register_action_metadata(
+    metadata: crate::kriya::action_registry::RegisteredActionMetadata,
+) -> Result<(), String> {
+    let registry = crate::kriya::action_registry::get_registry();
+    let mut reg_lock = registry.lock().map_err(|e| e.to_string())?;
+    reg_lock.register(metadata);
+    Ok(())
 }
