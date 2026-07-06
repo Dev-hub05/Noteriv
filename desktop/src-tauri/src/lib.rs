@@ -15,6 +15,7 @@ mod shim;
 mod store;
 mod updater_cmds;
 mod watcher;
+mod kriya;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -45,6 +46,7 @@ pub fn run() {
 
     let mut builder = tauri::Builder::default()
         .manage(app_state)
+        .manage(kriya::KriyaState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
@@ -135,6 +137,10 @@ pub fn run() {
             updater_cmds::updater_install,
             updater_cmds::updater_get_version,
             updater_cmds::updater_is_managed,
+            // kriya
+            kriya::commands::kriya_start_session,
+            kriya::commands::kriya_submit_step,
+            kriya::commands::kriya_get_session_status,
         ])
         .setup(|app| {
             // Inject the window.electronAPI shim so unmodified renderer code works.

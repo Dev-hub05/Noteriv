@@ -207,6 +207,11 @@ interface ElectronAPI {
   onMenuOpenFile: (callback: () => void) => () => void;
   onMenuOpenFolder: (callback: () => void) => () => void;
   onMenuSettings: (callback: () => void) => () => void;
+
+  // Kriya Agent-Native Core
+  kriyaStartSession: (request: { vault_path: string; initial_instruction: string; model?: string }) => Promise<string>;
+  kriyaSubmitStep: (sessionId: string, result?: any | null) => Promise<{ thought: string; action: any | null; final_answer: string | null }>;
+  kriyaGetSessionStatus: (sessionId: string) => Promise<any>;
 }
 
 // Extend Window with electronAPI

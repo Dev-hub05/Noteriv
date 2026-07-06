@@ -157,6 +157,11 @@ pub const SHIM_JS: &str = r#"
       onMenuOpenFile: function (cb) { return on("menu:open-file", function () { return undefined; }); },
       onMenuOpenFolder: function (cb) { return on("menu:open-folder", function () { return undefined; }); },
       onMenuSettings: function (cb) { return on("menu:settings", function () { return undefined; }); },
+
+      // ---- kriya
+      kriyaStartSession: function (request) { return invoke("kriya_start_session", { request: request }); },
+      kriyaSubmitStep: function (sessionId, result) { return invoke("kriya_submit_step", { sessionId: sessionId, result: result }); },
+      kriyaGetSessionStatus: function (sessionId) { return invoke("kriya_get_session_status", { sessionId: sessionId }); },
     };
 
     // The original menu listeners ignore payload; rewire them to pass the user
