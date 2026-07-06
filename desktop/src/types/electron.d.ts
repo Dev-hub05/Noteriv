@@ -214,6 +214,7 @@ interface ElectronAPI {
   kriyaGetSessionStatus: (sessionId: string) => Promise<any>;
   kriyaExecuteAction: (actionName: string, args: any) => Promise<any>;
   kriyaRegisterActionMetadata: (metadata: { name: string; description: string; schema: any }) => Promise<void>;
+  kriyaDispatchResult: (requestId: string, result: any) => Promise<void>;
 }
 
 // Extend Window with electronAPI

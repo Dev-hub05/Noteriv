@@ -1,9 +1,10 @@
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use crate::kriya::types::{AgentStartRequest, AgentActionResult, StepDecision, AgentActionRequest, Receipt};
 use chrono::Utc;
 use rand::Rng;
+use tokio::sync::oneshot;
 
 pub struct KriyaSession {
     pub id: String,
@@ -17,6 +18,20 @@ pub struct KriyaSession {
 #[derive(Default)]
 pub struct KriyaState {
     pub sessions: Mutex<HashMap<String, KriyaSession>>,
+}
+
+/// Pending dispatch results — maps request_id → oneshot sender.
+/// When the React dispatcher returns a result, we route it to the waiting sender.
+pub struct KriyaDispatchState {
+    pub pending: Mutex<HashMap<String, oneshot::Sender<AgentActionResult>>>,
+}
+
+impl Default for KriyaDispatchState {
+    fn default() -> Self {
+        Self {
+            pending: Mutex::new(HashMap::new()),
+        }
+    }
 }
 
 #[tauri::command]
@@ -57,7 +72,7 @@ pub fn kriya_submit_step(
         let receipt = Receipt {
             receipt_id: format!("rec_{}", rand::thread_rng().gen::<u32>()),
             timestamp: Utc::now().timestamp_millis() as u64,
-            action_name: "mock_action".to_string(), // In a real system, this would trace the requested action name
+            action_name: "mock_action".to_string(),
             arguments: serde_json::json!({}),
             result: res,
             signature: None,
@@ -67,7 +82,6 @@ pub fn kriya_submit_step(
 
     // Mock agent execution loop decision logic
     if session.step_count == 1 {
-        // Step 1: Propose an action to read a note
         Ok(StepDecision {
             thought: format!("I need to analyze the user instruction: '{}'. Let's first read a note.", session.initial_instruction),
             action: Some(AgentActionRequest {
@@ -77,7 +91,6 @@ pub fn kriya_submit_step(
             final_answer: None,
         })
     } else {
-        // Step 2: Propose final answer based on the result
         Ok(StepDecision {
             thought: "I have read the note. The operation was successful. Exiting loop.".to_string(),
             action: None,
@@ -107,24 +120,73 @@ pub fn kriya_get_session_status(
     }))
 }
 
+/// Dispatches an action to the React frontend for execution.
+///
+/// Flow:
+///   1. Validate args against schema in Rust registry
+///   2. Generate a unique request_id
+///   3. Create a oneshot channel and store the sender in KriyaDispatchState
+///   4. Emit "kriya:dispatch-action" event to React with { request_id, action_name, arguments }
+///   5. Await the oneshot receiver (React will call kriya_dispatch_result when done)
+///   6. Return the result
 #[tauri::command]
-pub fn kriya_execute_action(
+pub async fn kriya_execute_action(
+    app: AppHandle,
+    dispatch_state: State<'_, KriyaDispatchState>,
     action_name: String,
     arguments: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let registry = crate::kriya::action_registry::get_registry();
-    let reg_lock = registry.lock().map_err(|e| e.to_string())?;
-    
-    // Validate arguments against schema
-    reg_lock.validate_args(&action_name, &arguments)?;
-    
-    log::info!("Kriya action '{}' validated on Host.", action_name);
-    
-    Ok(serde_json::json!({
-        "status": "validated_successfully",
+    // Step 1: Validate arguments against schema
+    {
+        let registry = crate::kriya::action_registry::get_registry();
+        let reg_lock = registry.lock().map_err(|e| e.to_string())?;
+        reg_lock.validate_args(&action_name, &arguments)?;
+    }
+
+    // Step 2: Generate request_id
+    let request_id = format!("req_{}", rand::thread_rng().gen::<u64>());
+
+    // Step 3: Create oneshot channel
+    let (tx, rx) = oneshot::channel::<AgentActionResult>();
+    {
+        let mut pending = dispatch_state.pending.lock().map_err(|e| e.to_string())?;
+        pending.insert(request_id.clone(), tx);
+    }
+
+    // Step 4: Emit dispatch event to React
+    log::info!("Kriya dispatching action '{}' (request_id: {})", action_name, request_id);
+    app.emit("kriya:dispatch-action", serde_json::json!({
+        "request_id": request_id,
         "action_name": action_name,
         "arguments": arguments,
+    })).map_err(|e| format!("Failed to emit dispatch event: {}", e))?;
+
+    // Step 5: Await result from React
+    let result = rx.await.map_err(|_| "Dispatch channel closed — React handler did not respond".to_string())?;
+
+    // Step 6: Return
+    Ok(serde_json::json!({
+        "status": result.status,
+        "output": result.output,
+        "error_message": result.error_message,
     }))
+}
+
+/// Called by React dispatcher to return the result of an executed action.
+#[tauri::command]
+pub fn kriya_dispatch_result(
+    dispatch_state: State<'_, KriyaDispatchState>,
+    request_id: String,
+    result: AgentActionResult,
+) -> Result<(), String> {
+    let mut pending = dispatch_state.pending.lock().map_err(|e| e.to_string())?;
+    if let Some(sender) = pending.remove(&request_id) {
+        let _ = sender.send(result);
+        log::info!("Kriya dispatch result received for request_id: {}", request_id);
+        Ok(())
+    } else {
+        Err(format!("No pending dispatch found for request_id: {}", request_id))
+    }
 }
 
 #[tauri::command]

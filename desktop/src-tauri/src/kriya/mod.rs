@@ -4,3 +4,4 @@ pub mod schema;
 pub mod action_registry;
 
 pub use commands::KriyaState;
+pub use commands::KriyaDispatchState;

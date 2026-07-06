@@ -73,6 +73,7 @@ import { PluginManager, type PluginInstance } from "@/lib/plugin-api";
 import { BUILT_IN_THEMES, applyTheme, loadCustomThemes } from "@/lib/theme-utils";
 import { loadSnippets, refreshSnippets, type CSSSnippet } from "@/lib/css-snippets";
 import type { EditorView } from "@codemirror/view";
+import { initializeKriya, shutdownKriya } from "@/lib/kriya-init";
 
 const Editor = dynamic(() => import("@/components/Editor"), { ssr: false });
 const SourceEditor = dynamic(() => import("@/components/SourceEditor"), { ssr: false });
@@ -411,6 +412,7 @@ export default function Home() {
           }
         } catch {}
 
+        initializeKriya();
         setAppState("app");
       } else {
         setAppState("setup");
@@ -418,6 +420,12 @@ export default function Home() {
     }
     init();
   }, [loadWorkspace]);
+
+  useEffect(() => {
+    return () => {
+      shutdownKriya();
+    };
+  }, []);
 
   // ============================================================
   // Re-apply theme & snippets after app is ready
