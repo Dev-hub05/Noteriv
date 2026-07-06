@@ -162,6 +162,7 @@ pub const SHIM_JS: &str = r#"
       kriyaStartSession: function (request) { return invoke("kriya_start_session", { request: request }); },
       kriyaSubmitStep: function (sessionId, result) { return invoke("kriya_submit_step", { sessionId: sessionId, result: result }); },
       kriyaGetSessionStatus: function (sessionId) { return invoke("kriya_get_session_status", { sessionId: sessionId }); },
+      kriyaExecuteAction: function (actionName, args) { return invoke("kriya_execute_action", { actionName: actionName, arguments: args }); },
     };
 
     // The original menu listeners ignore payload; rewire them to pass the user

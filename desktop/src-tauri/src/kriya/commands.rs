@@ -106,3 +106,13 @@ pub fn kriya_get_session_status(
         "history_len": session.history.len(),
     }))
 }
+
+#[tauri::command]
+pub fn kriya_execute_action(
+    action_name: String,
+    arguments: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let registry = crate::kriya::action_registry::get_registry();
+    let reg_lock = registry.lock().map_err(|e| e.to_string())?;
+    reg_lock.execute(&action_name, arguments)
+}
