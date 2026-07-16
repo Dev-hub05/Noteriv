@@ -3,6 +3,8 @@
 ### Transforming a Local-First Notes App into an Agent-Native Desktop Application
 **Built for Kriyathon 2026**
 
+👉 **[Kriya Native Architecture Explained Simply (Hackathon Presentation Guide)](./kriya_native_explained.md)**
+
 ---
 
 ## ⚡ One-Line Pitch
