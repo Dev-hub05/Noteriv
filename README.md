@@ -59,18 +59,6 @@ Human User  ──┐
 AI Agent     ──┘
 ```
 
-### Why Not Browser/UI Automation?
-
-| Feature / Metric | Browser/UI Automation | Kriya Native |
-| :--- | :--- | :--- |
-| **Interface** | Clicks pixels, fragile selectors | Direct API calls to typed actions |
-| **Stability** | Easily breaks on UI theme or layout updates | Constant, compiler-checked TS/Rust types |
-| **Safety Gateways** | Hard to intercept mid-flight | Interactive oneshot approval gates |
-| **Compliance** | No audit trail or proof of action | Cryptographically signed transaction receipts |
-| **Dependencies** | Requires heavy headless browsers | Native, lightweight local-first execution |
-
----
-
 ## 🏗️ Project Architecture
 
 We designed a unified **Host-Client model** where Rust controls orchestration and React manages application state.
@@ -100,21 +88,6 @@ We designed a unified **Host-Client model** where Rust controls orchestration an
  │                               │         │                              │
  └───────────────────────────────┘         └──────────────────────────────┘
 ```
-
----
-
-## 🛠️ Kriya Components
-
-| Component | Purpose |
-| :--- | :--- |
-| **Registry** | Tool discovery. React exports JSON schemas to Rust at startup. |
-| **Host** | Governance. Enforces policy, budgets, and oneshot user approval gates. |
-| **Dispatcher** | Bridge. Dispatches Rust actions to React and returns results. |
-| **Memory** | Persistent Recall. Retains episodic, semantic, and procedural memories in the vault. |
-| **Inspector** | Debugging UI. An in-app drawer displaying thought logs, memory query, and approvals. |
-| **MCP** | External AI. Exposes Noteriv actions to Cursor, Claude Desktop, and LLM servers. |
-
----
 
 ## 🛡️ Governance Pipeline
 Every action initiated by the agent must pass through the governance pipeline before execution:
@@ -245,33 +218,6 @@ desktop/
 │   └── app/
 │       └── page.tsx           # Main workspace layout
 ```
-
----
-
-## ⚔️ Challenges & Solutions
-
-### 1. Business Logic Isolation
-*   *Challenge*: We wanted Rust to validate actions and manage governance, but duplication of note-saving or search logic in Rust would violate DRY principles and break existing plugins.
-*   *Solution*: We built a **Discovery handshake**. On startup, React registers its actions (and schemas) with Rust. When the agent acts, Rust validates the parameters but dispatches the execution back to React via Tauri events, getting the result back through an asynchronous oneshot listener.
-
-### 2. C-Toolchain Linking on Windows
-*   *Challenge*: Storing memories in SQLite via `rusqlite` required local compiler toolchains (`link.exe`), which failed on target dev environments missing MSVC SDKs.
-*   *Solution*: Designed a lightweight, optimized, pure-Rust JSON-file-backed episodic and long-term memory engine located directly inside the note vault.
-
----
-
-## 🎓 Lessons Learned
-1.  **AI Safety starts at the boundary**: Prompt engineering cannot guarantee an LLM won't try to delete a folder. The only reliable boundary is strict schema validation and permission gatekeeping at the host system level.
-2.  **Synchronous feel in an Async architecture**: Awaiting asynchronous Tauri IPC callbacks in a synchronous Rust loop requires robust oneshot channel matching.
-
----
-
-## 🔮 Future Roadmap
-*   **Semantic Vector Memory**: Integrate local vector embedding engines (e.g. `ort` or llama.cpp embeddings) for deep context retrieval.
-*   **Multi-Agent Workspaces**: Enable collaboration where separate specialized Kriya agents read different folders of the vault and reconcile daily tasks.
-*   **Voice Interactivity**: Add speech-to-action handlers using native whisper bindings.
-
----
 
 ## ❤️ Why This Matters
 We believe future desktop applications won't simply "contain AI." They'll expose their capabilities through governed actions, allowing humans and AI to collaborate safely in a shared runtime. **Kriya** provides the architecture to make this possible, and **Noteriv** demonstrates how an existing local-first application can adopt it natively.
